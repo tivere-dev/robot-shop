@@ -27,9 +27,21 @@ spec:
             add: ["NET_ADMIN"]
         ports:
         - containerPort: 3306
+        # On first start the image imports the shipping city list into a
+        # temporary server that does not listen on TCP. Only report ready once
+        # the real server accepts connections on 3306, so ratings and shipping
+        # are not sent to a database that refuses them.
+        readinessProbe:
+          tcpSocket:
+            port: 3306
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 2
         resources:
           limits:
-            cpu: 200m
+            # Upstream used 200m, which throttled the first-start import for
+            # several minutes on a laptop cluster.
+            cpu: 1000m
             memory: 1024Mi
           requests:
             cpu: 100m
