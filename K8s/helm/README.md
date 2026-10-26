@@ -105,7 +105,10 @@ $ helm install robot-shop --set openshift=true helm
 | image.version    | 2.1.0 | string | Docker tag to pull. |
 | image.digests.`<image>` | sha256 for 2.1.0 | string | Digest pinned for each image. Update or remove when changing `image.version`. |
 | loadgen.enabled  | true | boolean | Deploy the `rs-load` traffic generator. |
-| loadgen.host     | http://web:8080 | url | Where the generator sends traffic. Leave off the trailing slash, or requests become `//api/...`. |
+| loadgen.host     | http://traefik.traefik.svc.cluster.local | url | Where the generator sends traffic (through Traefik, so it is measured per API). Use http://web:8080 if Traefik is not installed. Leave off the trailing slash, or requests become `//api/...`. |
+| ingress.enabled  | true | boolean | Create an Ingress with one route per API in front of `web`. |
+| ingress.className | traefik | string | IngressClass that serves the routes (Traefik, installed with `monitoring/traefik-values.yaml`). |
+| ingress.apiPaths | catalogue, cart, payment, user, shipping, ratings | list | APIs that get their own `/api/<name>` route; everything else goes through `/`. |
 | loadgen.clients  | 5 | integer | Number of simulated users. |
 | loadgen.errors   | false | boolean | Also send a deliberately bad payment request (upstream's `ERROR=1`). |
 | rabbitmq.image   | rabbitmq:3.7-management-alpine@sha256:... | string | RabbitMQ image, pinned by digest. |

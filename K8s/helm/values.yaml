@@ -19,16 +19,31 @@ image:
     rs-user: sha256:ea509182c180d20340a9427d8320f35085effdb4ed77b15275022d17bdd1fcf7
     rs-web: sha256:b3c20d4a22f2875397726d2184062360bb2ab9c8776beffca7c2e7b3652893bc
 
+# Ingress routes in front of `web`, served by Traefik (installed separately with
+# monitoring/traefik-values.yaml). Each API gets its own route so request
+# rate, errors and latency are reported per API.
+ingress:
+  enabled: true
+  className: traefik
+  apiPaths:
+    - catalogue
+    - cart
+    - payment
+    - user
+    - shipping
+    - ratings
+
 # The Instana agent and Instana end-user monitoring (EUM) settings were removed
 # for this capstone. Monitoring is done with Prometheus, Loki and Jaeger instead.
 
 # Load generator (rs-load). Sends steady traffic to the shop.
 loadgen:
   enabled: true
-  # Where to send traffic. Later stages point this at the metrics proxy.
+  # Where to send traffic. It goes through Traefik so every request is
+  # measured per API. Without Traefik installed, use http://web:8080.
   # No trailing slash: load-gen appends paths that already start with "/",
-  # and "http://web:8080/" produced requests like "//api/cart/...".
-  host: http://web:8080
+  # and a trailing slash produced requests like "//api/cart/...".
+  host: http://traefik.traefik.svc.cluster.local
   # Upstream's manifest uses 15; 5 is lighter for a laptop cluster.
   clients: 5
   # true adds a task that sends a bad payment request on purpose (upstream
