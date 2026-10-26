@@ -1,0 +1,91 @@
+# Traefik for the Robot Shop capstone (chart traefik/traefik 42.1.3).
+#
+# Why Traefik: no Robot Shop service reports its own request rate, error rate
+# or latency. Traefik sits in front of `web` with one route per API, and its
+# Prometheus metrics give those three numbers per route without rebuilding
+# any application image.
+#
+# Install (from the repository root):
+#   helm install traefik oci://ghcr.io/traefik/helm/traefik --version 42.1.3 \
+#     -n traefik --create-namespace -f monitoring/traefik-values.yaml
+
+image:
+  registry: docker.io
+  repository: traefik
+  tag: v3.7.16
+  # Multi-arch index digest for v3.7.16 (checked 26 Oct 2026)
+  digest: sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65
+
+global:
+  # Do not call out to update.traefik.io on start-up
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+deployment:
+  replicas: 1
+
+# Internal only. Minikube has no cloud load balancer, and nothing here needs
+# to be reachable from outside the cluster (use kubectl port-forward).
+service:
+  spec:
+    type: ClusterIP
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false
+  name: traefik
+
+providers:
+  # Only standard Kubernetes Ingress objects are used; no Traefik CRDs.
+  kubernetesCRD:
+    enabled: false
+  kubernetesIngress:
+    enabled: true
+    # ClusterIP service has no external address to publish
+    publishedService:
+      enabled: false
+
+ports:
+  web:
+    port: 8000
+    exposedPort: 80
+  # No TLS in this local setup
+  websecure:
+    expose:
+      default: false
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+    # Label request metrics with the route (router), the backend service and
+    # the entry point, so each API can be graphed separately.
+    addRoutersLabels: true
+    addServicesLabels: true
+    addEntryPointsLabels: true
+    # Latency histogram buckets in seconds
+    buckets: "0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10"
+    # A Service for the metrics port, so Prometheus can scrape it later
+    service:
+      enabled: true
+
+# The dashboard stays internal: it is not exposed through any route.
+ingressRoute:
+  dashboard:
+    enabled: false
+
+# JSON logs carry a "level" field, which makes searching by level easier.
+log:
+  level: INFO
+  format: json
+
+# Per-request data comes from the metrics; access logs stay off.
+accessLog:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 192Mi
