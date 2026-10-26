@@ -54,8 +54,19 @@ $ helm install --set payment.gateway=https://foobar.com ...
 This fork (for a DevOps capstone) removes the Instana agent environment
 variable (`INSTANA_AGENT_HOST`) and the Instana end-user monitoring settings
 (`eum.key`, `eum.url`) from the chart. Monitoring is done with Prometheus,
-Loki and Jaeger instead. The application images still contain the Instana
-libraries; with no agent present they have nothing to report to.
+Loki and Jaeger instead.
+
+The application images still contain the Instana libraries. With no agent
+present they keep retrying and log messages such as:
+
+- web: `Error: lookup requests for all agent host candidates failed`
+- catalogue, cart and user: `Agent cannot be contacted via 127.0.0.1:42699 ...`
+  (warning level)
+- dispatch: `instana: ERROR: cannot connect to the agent ...`
+
+These messages do not affect the shop. Removing them would mean rebuilding five
+images, so they are kept. The log pipeline excludes them from error-level
+searches, and that filter is documented with the logging configuration.
 
 ## Load generator
 
