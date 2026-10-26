@@ -26,7 +26,9 @@ image:
 loadgen:
   enabled: true
   # Where to send traffic. Later stages point this at the metrics proxy.
-  host: http://web:8080/
+  # No trailing slash: load-gen appends paths that already start with "/",
+  # and "http://web:8080/" produced requests like "//api/cart/...".
+  host: http://web:8080
   # Upstream's manifest uses 15; 5 is lighter for a laptop cluster.
   clients: 5
   # true adds a task that sends a bad payment request on purpose (upstream

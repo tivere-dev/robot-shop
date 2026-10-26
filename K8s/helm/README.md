@@ -94,7 +94,7 @@ $ helm install robot-shop --set openshift=true helm
 | image.version    | 2.1.0 | string | Docker tag to pull. |
 | image.digests.`<image>` | sha256 for 2.1.0 | string | Digest pinned for each image. Update or remove when changing `image.version`. |
 | loadgen.enabled  | true | boolean | Deploy the `rs-load` traffic generator. |
-| loadgen.host     | http://web:8080/ | url | Where the generator sends traffic. |
+| loadgen.host     | http://web:8080 | url | Where the generator sends traffic. Leave off the trailing slash, or requests become `//api/...`. |
 | loadgen.clients  | 5 | integer | Number of simulated users. |
 | loadgen.errors   | false | boolean | Also send a deliberately bad payment request (upstream's `ERROR=1`). |
 | rabbitmq.image   | rabbitmq:3.7-management-alpine@sha256:... | string | RabbitMQ image, pinned by digest. |
