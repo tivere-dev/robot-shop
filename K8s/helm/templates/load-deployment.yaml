@@ -1,0 +1,53 @@
+{{- if .Values.loadgen.enabled }}
+# Steady traffic generator, based on upstream K8s/load-deployment.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load
+  labels:
+    service: load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: load
+  template:
+    metadata:
+      labels:
+        service: load
+    spec:
+      containers:
+      - name: load
+        image: {{ include "robot-shop.image" (list $ "rs-load") | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+          # Where the traffic is sent
+          - name: HOST
+            value: {{ .Values.loadgen.host | quote }}
+          - name: NUM_CLIENTS
+            value: {{ .Values.loadgen.clients | quote }}
+          - name: SILENT
+            value: "1"
+          # "1" adds a task that sends a bad payment request on purpose
+          - name: ERROR
+            value: {{ ternary "1" "0" .Values.loadgen.errors | quote }}
+        resources:
+          limits:
+            cpu: 200m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+      {{- with .Values.loadgen.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.loadgen.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.loadgen.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

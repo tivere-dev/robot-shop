@@ -25,13 +25,13 @@ $ helm install --set image.repo=eu.gcr.io/acme ...
 
 Will pull images from the European Google registry project `acme`.
 
-By default the latest version of the images is pulled. A specific version can be used:
+By default this fork pulls version 2.1.0, pinned by digest (the same images as
+`latest` when this was written). To use another version, clear the digests too,
+because they only match 2.1.0:
 
 ```shell
-$ helm install --set image.version=0.1.2 ...
+$ helm install --set image.version=2.0.2 --set image.digests=null ...
 ```
-
-It is recommened to always use the latest version.
 
 ## Pod Security Policy
 
@@ -49,15 +49,20 @@ By default the `payment` service uses https://www.paypal.com as the pseudo payme
 $ helm install --set payment.gateway=https://foobar.com ...
 ```
 
-## Website Monitoring / End-User Monitoring
+## Instana settings removed
 
-Optionally Website Monitoring / End-User Monitoring can be enabled for the web pages. Take a look at the [documentation](https://docs.instana.io/website_monitoring/) to see how to get a key and an endpoint url.
+This fork (for a DevOps capstone) removes the Instana agent environment
+variable (`INSTANA_AGENT_HOST`) and the Instana end-user monitoring settings
+(`eum.key`, `eum.url`) from the chart. Monitoring is done with Prometheus,
+Loki and Jaeger instead. The application images still contain the Instana
+libraries; with no agent present they have nothing to report to.
+
+## Load generator
+
+The chart deploys the `rs-load` traffic generator by default:
 
 ```shell
-$ helm install \
-    --set eum.key=xxxxxxxxx \
-    --set eum.url=https://eum-eu-west-1.instana.io \
-    ...
+$ helm install robot-shop --set loadgen.clients=10 --set loadgen.errors=true ...
 ```
 
 ## Use with Minis
@@ -84,15 +89,20 @@ $ helm install robot-shop --set openshift=true helm
 
 | Key              | Default | Type   | Description |
 | ---------------- | ------- | ------ | ----------- |
-| eum.key          | null    | string | EUM Access Key |
-| eum.url          | https://eum-eu-west-1.instana.io | url | EUM endpoint URL |
 | image.pullPolicy | IfNotPresent | string | Kubernetes pull policy. One of Always,IfNotPresent, or Never. |
 | image.repo       | robotshop | string | Base docker repository to pull the images from. |
-| image.version    | latest | string | Docker tag to pull. |
+| image.version    | 2.1.0 | string | Docker tag to pull. |
+| image.digests.`<image>` | sha256 for 2.1.0 | string | Digest pinned for each image. Update or remove when changing `image.version`. |
+| loadgen.enabled  | true | boolean | Deploy the `rs-load` traffic generator. |
+| loadgen.host     | http://web:8080/ | url | Where the generator sends traffic. |
+| loadgen.clients  | 5 | integer | Number of simulated users. |
+| loadgen.errors   | false | boolean | Also send a deliberately bad payment request (upstream's `ERROR=1`). |
+| rabbitmq.image   | rabbitmq:3.7-management-alpine@sha256:... | string | RabbitMQ image, pinned by digest. |
+| redis.image      | redis:4.0.6@sha256:... | string | Redis image, pinned by digest. |
 | nodeport         | false | booelan | Whether to expose the services via node port. |
 | openshift        | false | boolean | If OpenShift additional configuration is applied. |
 | payment.gateway  | null | string | External URL end-point to simulate partial/3rd party traces. |
-| psp.enabled      | false | boolean | Enable Pod Security Policy for clusters with a PSP Admission controller |
+| psp.enabled      | false | boolean | Enable Pod Security Policy. PodSecurityPolicy was removed in Kubernetes 1.25, so leave this false on current clusters. |
 | redis.storageClassName | standard | string | Storage class to use with Redis's StatefulSet. The default for EKS is gp2. |
 | ocCreateRoute    | false | boolean | If you are running on OpenShift and need a Route to the web service, set this to `true` |
 | `<workload>`.affinity    | {} | object | Affinity for pod assignment on nodes with matching labels (Refer [here](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity)) |
