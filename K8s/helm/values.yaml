@@ -46,6 +46,9 @@ loadgen:
   host: http://traefik.traefik.svc.cluster.local
   # Upstream's manifest uses 15; 5 is lighter for a laptop cluster.
   clients: 5
+  # Each Locust run lasts this long, then restarts with empty statistics
+  # (format 2h42m). Prevents the memory growth that OOMKilled load-gen.
+  runTime: 3m
   # true adds a task that sends a bad payment request on purpose (upstream
   # default). Off by default so the error rate reflects real failures; it can
   # be switched on as a fault for the incident drill.

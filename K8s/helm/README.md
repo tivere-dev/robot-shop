@@ -110,6 +110,7 @@ $ helm install robot-shop --set openshift=true helm
 | ingress.className | traefik | string | IngressClass that serves the routes (Traefik, installed with `monitoring/traefik-values.yaml`). |
 | ingress.apiPaths | catalogue, cart, payment, user, shipping, ratings | list | APIs that get their own `/api/<name>` route; everything else goes through `/`. |
 | loadgen.clients  | 5 | integer | Number of simulated users. |
+| loadgen.runTime  | 3m | duration | Length of each Locust run; load-gen restarts it in a loop so Locust's per-URL statistics (and memory) are reset. |
 | loadgen.errors   | false | boolean | Also send a deliberately bad payment request (upstream's `ERROR=1`). |
 | rabbitmq.image   | rabbitmq:3.7-management-alpine@sha256:... | string | RabbitMQ image, pinned by digest. |
 | redis.image      | redis:4.0.6@sha256:... | string | Redis image, pinned by digest. |

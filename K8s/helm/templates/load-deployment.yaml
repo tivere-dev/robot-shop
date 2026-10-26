@@ -20,7 +20,27 @@ spec:
       - name: load
         image: {{ include "robot-shop.image" (list $ "rs-load") | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        # Locust keeps statistics for every distinct URL, and load-gen's URLs
+        # contain unique IDs, so its memory grows until the container is
+        # OOMKilled. Run the image's entrypoint for RUN_TIME at a time in a
+        # loop: each run starts with empty statistics, and the container never
+        # exits, so Kubernetes adds no restart back-off. The trap passes
+        # SIGTERM on to Locust so the pod stops promptly.
+        command:
+          - /bin/sh
+          - -c
+          - |
+            trap 'kill $child 2>/dev/null; exit 0' TERM INT
+            while true; do
+              ./entrypoint.sh &
+              child=$!
+              wait $child
+              sleep 1
+            done
         env:
+          # Length of each Locust run before it restarts with fresh statistics
+          - name: RUN_TIME
+            value: {{ .Values.loadgen.runTime | quote }}
           # Where the traffic is sent
           - name: HOST
             value: {{ .Values.loadgen.host | quote }}
@@ -34,7 +54,9 @@ spec:
         resources:
           limits:
             cpu: 200m
-            memory: 200Mi
+            # Upstream used 200Mi; headroom for the statistics that build up
+            # during one RUN_TIME period.
+            memory: 384Mi
           requests:
             cpu: 100m
             memory: 100Mi
