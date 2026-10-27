@@ -1,0 +1,87 @@
+# promtool unit tests for the SLO alerts in robot-shop-slo-rules.yaml.
+# CI converts the PrometheusRule into slo-rules.yaml next to this file, then:
+#   promtool test rules robot-shop-slo-rules.test.yaml
+rule_files:
+  - slo-rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # Half of all /api requests fail: both burn-rate alerts must fire
+  - name: 50% errors fire both alerts
+    interval: 1m
+    input_series:
+      - series: 'traefik_router_requests_total{router="robot-shop-robot-shop-api-catalogue@kubernetes",code="200"}'
+        values: '0+60x60'
+      - series: 'traefik_router_requests_total{router="robot-shop-robot-shop-api-catalogue@kubernetes",code="502"}'
+        values: '0+60x60'
+    alert_rule_test:
+      # fast burn: true after ~1 min, then "for: 2m"
+      - eval_time: 5m
+        alertname: RobotShopErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: robot-shop-availability
+            exp_annotations:
+              summary: Robot Shop API is failing fast enough to use the 28-day error budget in about 2 days
+              description: 50% of /api requests returned 5xx over the last hour (SLO allows 0.5%). Check the dashboard for which API is failing.
+              runbook_url: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md
+              dashboard: http://localhost:3000/d/robot-shop-red
+      # slow burn has "for: 15m": not firing yet at 5 minutes...
+      - eval_time: 5m
+        alertname: RobotShopErrorBudgetSlowBurn
+        exp_alerts: []
+      # ...but firing at 20 minutes
+      - eval_time: 20m
+        alertname: RobotShopErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              slo: robot-shop-availability
+            exp_annotations:
+              summary: Robot Shop API errors are using the error budget faster than planned
+              description: 50% of /api requests returned 5xx over the last 6 hours (SLO allows 0.5%).
+              runbook_url: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md
+              dashboard: http://localhost:3000/d/robot-shop-red
+
+  # Healthy traffic: no 5xx series at all, nothing may fire
+  - name: no errors fire nothing
+    interval: 1m
+    input_series:
+      - series: 'traefik_router_requests_total{router="robot-shop-robot-shop-api-catalogue@kubernetes",code="200"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: RobotShopErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RobotShopErrorBudgetSlowBurn
+        exp_alerts: []
+
+  # Data stops during an outage (the laptop slept in the 27 Oct drill):
+  # keep_firing_for must keep the alert firing instead of sending RESOLVED
+  - name: a data gap does not resolve the alert straight away
+    interval: 1m
+    input_series:
+      - series: 'traefik_router_requests_total{router="robot-shop-robot-shop-api-catalogue@kubernetes",code="200"}'
+        values: '0+60x20'
+      - series: 'traefik_router_requests_total{router="robot-shop-robot-shop-api-catalogue@kubernetes",code="502"}'
+        values: '0+60x20'
+    alert_rule_test:
+      # the last sample is at 20m; the expression is empty from ~25m on
+      - eval_time: 30m
+        alertname: RobotShopErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: robot-shop-availability
+            exp_annotations:
+              summary: Robot Shop API is failing fast enough to use the 28-day error budget in about 2 days
+              description: 50% of /api requests returned 5xx over the last hour (SLO allows 0.5%). Check the dashboard for which API is failing.
+              runbook_url: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md
+              dashboard: http://localhost:3000/d/robot-shop-red
+      # more than 10 minutes after the data stopped: resolved
+      - eval_time: 40m
+        alertname: RobotShopErrorBudgetFastBurn
+        exp_alerts: []
