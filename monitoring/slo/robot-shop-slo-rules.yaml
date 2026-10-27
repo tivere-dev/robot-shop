@@ -62,6 +62,9 @@ spec:
             and
             robotshop:api_error_ratio:rate5m > (14.4 * 0.005)
           for: 2m
+          # Do not send RESOLVED just because data is missing for a few minutes
+          # (a data gap made the drill on 27 Oct send a false RESOLVED)
+          keep_firing_for: 10m
           labels:
             severity: critical
             slo: robot-shop-availability
@@ -79,6 +82,7 @@ spec:
             and
             robotshop:api_error_ratio:rate30m > (6 * 0.005)
           for: 15m
+          keep_firing_for: 10m
           labels:
             severity: warning
             slo: robot-shop-availability

@@ -77,7 +77,15 @@ ocCreateRoute: false
 
 cart: {}
 
-catalogue: {}
+catalogue:
+  # Node.js uses about 40-50 MiB under the load generator
+  resources:
+    limits:
+      cpu: 200m
+      memory: 100Mi
+    requests:
+      cpu: 100m
+      memory: 50Mi
 
 dispatch: {}
 

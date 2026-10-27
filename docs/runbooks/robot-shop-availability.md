@@ -73,6 +73,7 @@ Jaeger (`http://localhost:16686`, service `payment`) or Grafana → Explore → 
 |---|---|---|
 | Bad release | errors start right after `helm upgrade` | `helm rollback` to the previous revision |
 | Memory limit too low | `OOMKilled`, restarts climbing, memory near 100 % of limit | roll back, or raise the limit in `K8s/helm/values.yaml` |
+| (prevention) Lowering a limit | n/a | Before lowering a memory limit, check *Memory as % of limit* (24 h peak) and keep at least 30 % headroom ([postmortem](../postmortems/2026-10-27-catalogue-oom.md)) |
 | CPU throttling | 504s, latency up, CPU flat at the limit | raise the CPU limit (shipping needed 1000m) |
 | Database not ready | MySQL/MongoDB errors in ratings, shipping, user, catalogue logs | wait for `mysql`/`mongodb` to be ready; check their pods |
 | Node out of memory | many pods restarting at once | `docker stats capstone`; scale down something non-essential |

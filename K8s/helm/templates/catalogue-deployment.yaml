@@ -6,6 +6,13 @@ metadata:
     service: catalogue
 spec:
   replicas: 1
+  # Keep the old pod until the new one is ready, so a release whose pod never
+  # becomes ready cannot take catalogue down (postmortem 2026-10-27)
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       service: catalogue
@@ -23,13 +30,18 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - containerPort: 8080
+        # Ready only when the server answers /health; a pod that keeps
+        # crashing never receives traffic
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
         resources:
-          limits:
-            cpu: 200m
-            memory: 100Mi
-          requests:
-            cpu: 100m
-            memory: 50Mi
+          {{- toYaml .Values.catalogue.resources | nindent 10 }}
       restartPolicy: Always
       {{- with .Values.catalogue.affinity }}
       affinity:

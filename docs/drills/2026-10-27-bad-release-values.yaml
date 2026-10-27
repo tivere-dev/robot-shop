@@ -1,0 +1,19 @@
+# Incident drill, 27 Oct 2026: the "bad release" (fault injected on purpose).
+#
+# A change meant to save memory on the crowded cluster lowers catalogue's
+# memory limit from 100Mi to 24Mi. catalogue (Node.js) needs ~37 MiB at rest
+# and ~51 MiB under load, so it is OOMKilled over and over.
+#
+# Used only for the drill, together with the normal tracing values:
+#   helm upgrade robot-shop K8s/helm -n robot-shop \
+#     -f tracing/robot-shop-tracing-values.yaml \
+#     -f docs/drills/2026-10-27-bad-release-values.yaml
+# Postmortem: docs/postmortems/2026-10-27-catalogue-oom.md
+catalogue:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 24Mi
+    requests:
+      cpu: 100m
+      memory: 24Mi
