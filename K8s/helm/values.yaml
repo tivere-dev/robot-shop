@@ -90,6 +90,15 @@ payment:
   # Default is https://www.paypal.com
   gateway: null
   #gateway: https://www.worldpay.com
+  # Full image reference that replaces robotshop/rs-payment, e.g. the
+  # OpenTelemetry build from payment/Dockerfile.otel. Empty = upstream image.
+  image: ""
+  # OpenTelemetry tracing (needs an image built from payment/Dockerfile.otel
+  # and a collector; see tracing/README.md)
+  tracing:
+    enabled: false
+    # OTLP over HTTP; the SDK adds /v1/traces
+    endpoint: http://otel-collector.tracing.svc.cluster.local:4318
 
 rabbitmq:
   # Upstream's tag, pinned by digest (multi-arch index)

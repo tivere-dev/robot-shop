@@ -1,0 +1,18 @@
+# Payment service with OpenTelemetry tracing (capstone addition).
+#
+# Starts from the published rs-payment 2.1.0 image, which already has the
+# service's Python packages, and adds the OpenTelemetry ones plus the
+# instrumented code. This avoids rebuilding from python:3.9 (about 1 GB).
+#
+# Build inside Minikube (from the repository root):
+#   minikube -p capstone image build -t robot-shop/rs-payment:2.1.0-otel \
+#     -f Dockerfile.otel payment
+FROM docker.io/robotshop/rs-payment:2.1.0@sha256:774b52c6180d8f3273f77230d70ace9c45e1f8909e21e10a19ed83b1cec53bb3
+
+WORKDIR /app
+
+# Already-installed packages are left as they are; only OpenTelemetry is added
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY *.py /app/

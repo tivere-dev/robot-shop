@@ -117,6 +117,9 @@ $ helm install robot-shop --set openshift=true helm
 | nodeport         | false | booelan | Whether to expose the services via node port. |
 | openshift        | false | boolean | If OpenShift additional configuration is applied. |
 | payment.gateway  | null | string | External URL end-point to simulate partial/3rd party traces. |
+| payment.image    | "" | string | Full image reference that replaces `robotshop/rs-payment`, e.g. `robot-shop/rs-payment:2.1.0-otel` built from `payment/Dockerfile.otel`. |
+| payment.tracing.enabled | false | boolean | Send OpenTelemetry traces from payment (needs the OTel image above and a collector, see `tracing/README.md`). |
+| payment.tracing.endpoint | http://otel-collector.tracing.svc.cluster.local:4318 | url | OTLP/HTTP endpoint of the collector. |
 | psp.enabled      | false | boolean | Enable Pod Security Policy. PodSecurityPolicy was removed in Kubernetes 1.25, so leave this false on current clusters. |
 | redis.storageClassName | standard | string | Storage class to use with Redis's StatefulSet. The default for EKS is gp2. |
 | ocCreateRoute    | false | boolean | If you are running on OpenShift and need a Route to the web service, set this to `true` |
