@@ -1,0 +1,85 @@
+# Loki for the Robot Shop capstone (grafana/loki chart 7.5.0, Loki 3.6.11).
+#
+# One Loki process ("single binary") that stores logs on a small volume
+# inside the Minikube cluster. No object storage, caches, gateway or canary:
+# they are for multi-node production setups and would not fit in 7 GB.
+#
+# Install (from the repository root):
+#   helm install loki loki --repo https://grafana.github.io/helm-charts \
+#     --version 7.5.0 -n logging --create-namespace -f logging/loki-values.yaml
+
+deploymentMode: SingleBinary
+
+loki:
+  image:
+    tag: 3.6.11
+    digest: sha256:44148ad243c07957113baea950ee5ba9b0c8eff8d7e38ff3cc1c0af705790945
+  # One tenant only; Fluent Bit and Grafana do not send a tenant ID
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+  limits_config:
+    # Same history as Prometheus (24h); the compactor deletes older logs
+    retention_period: 24h
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    volume_enabled: true
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  pattern_ingester:
+    enabled: false
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  extraEnv:
+    # Ask the Go runtime to stay below the container limit
+    - name: GOMEMLIMIT
+      value: 400MiB
+
+# Components of the scalable modes: not used in single-binary mode
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false
+
+# Sidecar that loads alerting rules from ConfigMaps; no Loki rules are used
+sidecar:
+  rules:
+    enabled: false
