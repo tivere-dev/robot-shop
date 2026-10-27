@@ -1,0 +1,20 @@
+# Packs the dashboard JSON into a ConfigMap that Grafana's sidecar loads
+# automatically (kube-prometheus-stack watches for the grafana_dashboard label).
+#
+# Apply (from the repository root):
+#   kubectl apply -k monitoring/dashboards
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+generatorOptions:
+  # Keep a stable ConfigMap name so re-applying updates it in place
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+
+configMapGenerator:
+  - name: robot-shop-red-dashboard
+    files:
+      - robot-shop-red.json

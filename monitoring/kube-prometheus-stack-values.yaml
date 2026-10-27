@@ -108,7 +108,9 @@ grafana:
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 384Mi
+      # 384Mi was too low: Grafana was OOMKilled at 383 MiB while rendering
+      # the 18-panel Robot Shop dashboard.
+      memory: 768Mi
 
 # ---------------------------------------------------------------------------
 # Supporting components
