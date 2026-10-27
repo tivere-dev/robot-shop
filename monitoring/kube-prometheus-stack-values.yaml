@@ -67,10 +67,18 @@ prometheus:
         memory: 900Mi
 
 # ---------------------------------------------------------------------------
-# Alertmanager (used for the SLO alert later)
+# Alertmanager: sends the Robot Shop SLO alerts to Slack
 # ---------------------------------------------------------------------------
+# The Slack webhook URL is a secret, so it is not in this file. It is read
+# from the Secret "alertmanager-slack" (key webhook-url), created by hand:
+#   kubectl -n monitoring create secret generic alertmanager-slack \
+#     --from-literal=webhook-url='https://hooks.slack.com/services/...'
+# The Secret must exist before installing or upgrading this release.
 alertmanager:
   alertmanagerSpec:
+    # Mounted at /etc/alertmanager/secrets/alertmanager-slack/
+    secrets:
+      - alertmanager-slack
     resources:
       requests:
         cpu: 10m
@@ -78,6 +86,35 @@ alertmanager:
       limits:
         cpu: 100m
         memory: 128Mi
+  config:
+    route:
+      group_by: [alertname, slo]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "null"
+      routes:
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null"
+        - matchers:
+            - slo = "robot-shop-availability"
+          receiver: slack-robot-shop
+    receivers:
+      - name: "null"
+      - name: slack-robot-shop
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook-url
+            channel: "#robot-shop-alerts"
+            send_resolved: true
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+            text: |-
+              {{ range .Alerts }}*{{ .Annotations.summary }}*
+              {{ .Annotations.description }}
+              Runbook: {{ .Annotations.runbook_url }}
+              Dashboard: {{ .Annotations.dashboard }}
+              {{ end }}
 
 # ---------------------------------------------------------------------------
 # Grafana

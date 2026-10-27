@@ -1,0 +1,44 @@
+# C2-6 evidence: availability SLO, burn-rate alerts, Slack route, runbook
+Recorded 2026-10-27 15:14 UTC on Minikube profile capstone.
+
+## Objects
+prometheusrule.monitoring.coreos.com/robot-shop-slo
+deployment.apps/slack-mock
+service/slack-mock
+secret/alertmanager-slack: keys = ['webhook-url'] (value = the slack-mock URL; not committed)
+  monitoring rev 3 superseded
+  monitoring rev 4 deployed
+
+## Rules loaded in Prometheus (GET /api/v1/rules)
+  robot-shop-slo.alerts      RobotShopErrorBudgetFastBurn                       health=ok inactive
+  robot-shop-slo.alerts      RobotShopErrorBudgetSlowBurn                       health=ok inactive
+  robot-shop-slo.recording   robotshop:api_error_ratio:rate5m                   health=ok 
+  robot-shop-slo.recording   robotshop:api_error_ratio:rate30m                  health=ok 
+  robot-shop-slo.recording   robotshop:api_error_ratio:rate1h                   health=ok 
+  robot-shop-slo.recording   robotshop:api_error_ratio:rate6h                   health=ok 
+  robot-shop-slo.recording   robotshop:api_error_ratio:rate1d                   health=ok 
+  robot-shop-slo.recording   robotshop:api_error_budget_burn_rate:1h            health=ok 
+  robot-shop-slo.recording   robotshop:api_error_budget_used_by_last_1d:ratio   health=ok 
+
+## Current values
+  robotshop:api_error_ratio:rate5m                   0.0
+  robotshop:api_error_ratio:rate1h                   0.01017
+  robotshop:api_error_ratio:rate6h                   0.01017
+  robotshop:api_error_ratio:rate1d                   0.00305
+  robotshop:api_error_budget_burn_rate:1h            2.03386
+  robotshop:api_error_budget_used_by_last_1d:ratio   0.0218
+  The 1h/1d error comes from shipping returning 502s while it started after the cluster restart
+  (~14:35 UTC): that restart alone used about 2.2% of the 28-day budget.
+
+## Alertmanager
+  Loaded config: 1 x 'Completed loading of configuration file', 0 lines with level=ERROR
+  Route: slo="robot-shop-availability" -> receiver slack-robot-shop (slack_configs, api_url_file from the Secret)
+
+## Slack route test (hand-made alert SlackRouteTest posted to Alertmanager's /api/v2/alerts)
+  Message received by slack-mock (exactly what Slack would be sent):
+  SLACK {"channel": "#robot-shop-alerts", "title": "[FIRING] SlackRouteTest (info)", "text": "*Test of the Slack route (not a real incident)*\nSent by hand with the Alertmanager API.\nRunbook: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md\nDashboard: http://localhost:3000/d/robot-shop-red\n", "color": "danger"}
+
+## Not verified
+  Delivery to a real Slack workspace: no Slack webhook is configured in this $0 local setup.
+  Replacing the Secret's webhook-url with a real hooks.slack.com URL is the only change needed
+  (docs/runbooks/robot-shop-availability.md, 'Slack set-up').
