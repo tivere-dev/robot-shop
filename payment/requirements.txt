@@ -3,5 +3,10 @@ Flask
 requests
 pika
 prometheus_client
-opentracing
-instana
+# OpenTelemetry tracing (replaces instana). 1.41.1 / 0.62b1 are the last
+# releases that support Python 3.9, which the payment image uses.
+opentelemetry-api==1.41.1
+opentelemetry-sdk==1.41.1
+opentelemetry-exporter-otlp-proto-http==1.41.1
+opentelemetry-instrumentation-flask==0.62b1
+opentelemetry-instrumentation-requests==0.62b1

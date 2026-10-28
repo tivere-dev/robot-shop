@@ -1,0 +1,127 @@
+# Capstone 2, stage C2-3c: requests, errors and latency dashboard
+# Captured: 2026-10-26 21:05 UTC. LOCAL Minikube profile 'capstone' (not AWS EKS).
+# Files: monitoring/dashboards/robot-shop-red.json, monitoring/dashboards/kustomization.yaml
+
+## Dashboard content (uid robot-shop-red)
+
+[Summary]
+  2. Requests per second (all APIs) (stat, 1 query)
+  3. 5xx error rate (all APIs) (stat, 1 query)
+  4. payment p95 latency (stat, 1 query)
+  5. Containers ready (stat, 1 query)
+
+[Requests, errors and latency per API (Traefik)]
+  7. Requests per second by API (timeseries, 1 query)
+  8. 5xx error rate by API (timeseries, 1 query)
+  9. p50 latency by API (timeseries, 1 query)
+  10. p95 latency by API (timeseries, 1 query)
+  11. p99 latency by API (timeseries, 1 query)
+  12. Responses by status code (timeseries, 1 query)
+
+[Focus services: web, catalogue, cart, payment]
+  14. web (stat, 3 queries)
+  15. catalogue (stat, 3 queries)
+  16. cart (stat, 3 queries)
+  17. payment (stat, 3 queries)
+
+[Service health (Kubernetes)]
+  19. Available replicas by Deployment (bargauge, 1 query)
+  20. Restarts in the last hour by container (bargauge, 1 query)
+  21. CPU by container (timeseries, 1 query)
+  22. Memory as % of limit by container (timeseries, 1 query)
+
+Variables: datasource (Prometheus), namespace (default robot-shop).
+Request, error and latency numbers come from Traefik (one route per API); service health from kube-state-metrics and cAdvisor.
+
+## Applied with kustomize
+$ kubectl apply -k monitoring/dashboards
+configmap/robot-shop-red-dashboard created
+NAME                       DATA   AGE     LABELS
+robot-shop-red-dashboard   1      3m23s   grafana_dashboard=1
+Grafana's dashboard sidecar picked it up about 4 s later (sidecar log: Writing /tmp/dashboards/robot-shop-red.json).
+
+## Every panel query run against Prometheus
+($__rate_interval replaced by 2m, $namespace by robot-shop; columns: panel id, title, refId, status, series, sample values)
+2   Requests per second (all APIs)             A  success series=1   value=4.467
+3   5xx error rate (all APIs)                  A  success series=1   value=0
+4   payment p95 latency                        A  success series=1   value=10
+5   Containers ready                           A  success series=1   value=100
+7   Requests per second by API                 A  success series=7   cart=0.978, catalogue=0.978, ratings=0.711, shipping=0.978
+8   5xx error rate by API                      A  success series=7   cart=0, catalogue=0, ratings=0, shipping=0
+9   p50 latency by API                         A  success series=7   web-ui=0.003, payment=6, cart=0.006, catalogue=0.006
+10  p95 latency by API                         A  success series=7   payment=10, cart=0.024, catalogue=0.024, ratings=0.044
+11  p99 latency by API                         A  success series=7   ratings=0.084, shipping=5.6, user=0.01, web-ui=0.022
+12  Responses by status code                   A  success series=2   200=4.455, 499=0.011
+14  web                                        A  success series=1   value=4.467
+14  web                                        B  success series=1   value=0
+14  web                                        C  success series=1   value=1.975
+15  catalogue                                  A  success series=1   value=0.978
+15  catalogue                                  B  success series=1   value=0
+15  catalogue                                  C  success series=1   value=0.024
+16  cart                                       A  success series=1   value=0.978
+16  cart                                       B  success series=1   value=0
+16  cart                                       C  success series=1   value=0.024
+17  payment                                    A  success series=1   value=0.222
+17  payment                                    B  success series=1   value=0
+17  payment                                    C  success series=1   value=10
+19  Available replicas by Deployment           A  success series=12  kube-state-metrics=1, kube-state-metrics=1, kube-state-metrics=1, kube-state-metrics=1
+20  Restarts in the last hour by container     A  success series=13  web=0, mongodb=0, mysql=0, ratings=0
+21  CPU by container                           A  success series=13  cart=0.006, catalogue=0.007, dispatch=0.01, mongodb=0.01
+22  Memory as % of limit by container          A  success series=13  cart=43.168, catalogue=44.488, dispatch=16.504, mongodb=52.135
+Result: 26 of 26 queries succeeded; none returned an empty result.
+
+## Export round-trip (Grafana API GET /api/dashboards/uid/robot-shop-red vs the repo file)
+Panels (id, type, title, gridPos) and every target (refId, expr, legendFormat): identical.
+repo: 18 panels, 26 queries, schemaVersion 39; Grafana: 18 panels, 26 queries, schemaVersion 39.
+The only difference: Grafana adds a numeric "id" field at the top level.
+
+## Browser check: NOT completed
+- Pasting the generated admin password through the macOS clipboard did not reach the browser
+  pane, so the clipboard was cleared and a temporary Viewer user (capstone-screenshot, random
+  throwaway password) was created through the Grafana API to sign in without exposing the admin
+  password.
+- The login worked and Grafana opened the dashboard, but while it was rendering Grafana was
+  OOMKilled at 21:04:21 UTC: its working set reached 383 MiB of the 384Mi limit set in
+  monitoring/kube-prometheus-stack-values.yaml. It restarted by itself and is ready again.
+- The temporary Viewer user was then deleted; only "admin" remains.
+- No screenshot of the rendered dashboard was taken.
+grafana restarts=1 last=OOMKilled/137 at 2026-10-26T21:04:21Z
+
+## Grafana memory limit 384Mi -> 768Mi (monitoring revision 2): upgrade marked FAILED
+Recorded 2026-10-27 ~02:25 UTC.
+- helm upgrade started 2026-10-26 22:08 UTC (local time 23:08) and returned at 02:22:38 UTC with:
+  "UPGRADE FAILED: post-upgrade hooks failed: ... job-patchWebhook.yaml failed: server-side apply
+  failed for object monitoring/monitoring-admission-patch ...: etcdserver: request timed out"
+- helm history: revision 1 deployed, revision 2 failed.
+- The change itself was applied: the new Grafana pod (started 21:08:18 UTC) has limit 768Mi and was
+  ready with 0 restarts at 02:22 UTC. The admin password Secret was unchanged (SHA-256 fingerprint
+  compared before and after; the value was never printed).
+- During the upgrade the Mac went to sleep ("DarkWake from Normal Sleep" in pmset log around
+  02:21 UTC); on wake the load average was 27-35 and the Kubernetes API returned
+  "TLS handshake timeout" before recovering (/readyz ok).
+- The minikube node's kernel log shows "Memory cgroup out of memory" at 02:13:15 UTC killing the
+  grafana process and its plugin helper processes. docker inspect reports OOMKilled=true for the
+  capstone node container (its 7 GB limit), i.e. memory ran out at the cluster level.
+- Restart counts seen at 02:21 UTC: kube-state-metrics 1, prometheus-operator 2, node-exporter 1,
+  storage-provisioner 2, voting-app worker 1.
+- The dashboard screenshot was NOT retried: commands to the cluster were taking over 2 minutes,
+  so work was stopped. No temporary Grafana user was created this time.
+
+## Resumed 2026-10-27: upgrade re-run (revision 3) and screenshot taken
+- Docker Desktop started; minikube start -p capstone --cpus=4 --memory=7168 --keep-context
+  (the existing cluster restarted, nothing deleted).
+- The Voting App Deployments were scaled to 0 replicas to free memory for Capstone 2
+  (kubectl -n voting-app scale deploy --all --replicas=0). They can be scaled back to 1.
+- helm upgrade monitoring re-run with the same values file:
+    REVISION	UPDATED                 	STATUS    	CHART                        	APP VERSION	DESCRIPTION
+    1       	Mon Oct 26 20:59:43 2026	superseded	kube-prometheus-stack-92.14.0	v0.94.2    	Install complete
+    2       	Mon Oct 26 22:08:06 2026	failed    	kube-prometheus-stack-92.14.0	v0.94.2    	Upgrade "monitoring" failed: post-upgrade hooks failed: warning: Hook post-upgrade kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/job-patchWebhook.yaml failed: server-side apply failed for object monitoring/monitoring-admission-patch batch/v1, Kind=Job: etcdserver: request timed out
+    3       	Tue Oct 27 15:38:09 2026	deployed  	kube-prometheus-stack-92.14.0	v0.94.2    	Upgrade complete
+  The admin password Secret fingerprint was unchanged.
+- Signed in with a temporary Viewer user (capstone-screenshot) and opened /d/robot-shop-red
+  (last 30 minutes, kiosk mode). All 18 panels rendered with live data:
+  3.01 req/s, 0.00% 5xx, payment p95 8.00 s, 100% containers ready.
+  Screenshot: docs/evidence/c2-3c-dashboard.jpg
+- The temporary user was deleted through the API ("User deleted"); only "admin" remains.
+- Grafana did not run out of memory: one restart, reason "Unknown" (the cluster stop),
+  no OOMKilled. Node container: 4.5 GiB of 7 GiB in use after the render.

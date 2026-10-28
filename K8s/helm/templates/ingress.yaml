@@ -1,0 +1,33 @@
+{{- if .Values.ingress.enabled }}
+# One route per API in front of `web`. All routes go to the same web Service;
+# they exist so the ingress controller (Traefik) reports request count, status
+# and latency separately for each API.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: robot-shop
+  labels:
+    service: web
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+  - http:
+      paths:
+      {{- range .Values.ingress.apiPaths }}
+      - path: /api/{{ . }}
+        pathType: Prefix
+        backend:
+          service:
+            name: web
+            port:
+              number: 8080
+      {{- end }}
+      # Everything else: the web UI and static files
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web
+            port:
+              number: 8080
+{{- end }}

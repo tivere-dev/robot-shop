@@ -1,0 +1,7 @@
+# Extra values for the Robot Shop chart that switch on OpenTelemetry tracing
+# for the payment service. Build the image first (see tracing/README.md), then:
+#   helm upgrade robot-shop K8s/helm -n robot-shop -f tracing/robot-shop-tracing-values.yaml
+payment:
+  image: robot-shop/rs-payment:2.1.0-otel
+  tracing:
+    enabled: true

@@ -25,13 +25,13 @@ $ helm install --set image.repo=eu.gcr.io/acme ...
 
 Will pull images from the European Google registry project `acme`.
 
-By default the latest version of the images is pulled. A specific version can be used:
+By default this fork pulls version 2.1.0, pinned by digest (the same images as
+`latest` when this was written). To use another version, clear the digests too,
+because they only match 2.1.0:
 
 ```shell
-$ helm install --set image.version=0.1.2 ...
+$ helm install --set image.version=2.0.2 --set image.digests=null ...
 ```
-
-It is recommened to always use the latest version.
 
 ## Pod Security Policy
 
@@ -49,15 +49,31 @@ By default the `payment` service uses https://www.paypal.com as the pseudo payme
 $ helm install --set payment.gateway=https://foobar.com ...
 ```
 
-## Website Monitoring / End-User Monitoring
+## Instana settings removed
 
-Optionally Website Monitoring / End-User Monitoring can be enabled for the web pages. Take a look at the [documentation](https://docs.instana.io/website_monitoring/) to see how to get a key and an endpoint url.
+This fork (for a DevOps capstone) removes the Instana agent environment
+variable (`INSTANA_AGENT_HOST`) and the Instana end-user monitoring settings
+(`eum.key`, `eum.url`) from the chart. Monitoring is done with Prometheus,
+Loki and Jaeger instead.
+
+The application images still contain the Instana libraries. With no agent
+present they keep retrying and log messages such as:
+
+- web: `Error: lookup requests for all agent host candidates failed`
+- catalogue, cart and user: `Agent cannot be contacted via 127.0.0.1:42699 ...`
+  (warning level)
+- dispatch: `instana: ERROR: cannot connect to the agent ...`
+
+These messages do not affect the shop. Removing them would mean rebuilding five
+images, so they are kept. The log pipeline excludes them from error-level
+searches, and that filter is documented with the logging configuration.
+
+## Load generator
+
+The chart deploys the `rs-load` traffic generator by default:
 
 ```shell
-$ helm install \
-    --set eum.key=xxxxxxxxx \
-    --set eum.url=https://eum-eu-west-1.instana.io \
-    ...
+$ helm install robot-shop --set loadgen.clients=10 --set loadgen.errors=true ...
 ```
 
 ## Use with Minis
@@ -84,15 +100,28 @@ $ helm install robot-shop --set openshift=true helm
 
 | Key              | Default | Type   | Description |
 | ---------------- | ------- | ------ | ----------- |
-| eum.key          | null    | string | EUM Access Key |
-| eum.url          | https://eum-eu-west-1.instana.io | url | EUM endpoint URL |
 | image.pullPolicy | IfNotPresent | string | Kubernetes pull policy. One of Always,IfNotPresent, or Never. |
 | image.repo       | robotshop | string | Base docker repository to pull the images from. |
-| image.version    | latest | string | Docker tag to pull. |
+| image.version    | 2.1.0 | string | Docker tag to pull. |
+| image.digests.`<image>` | sha256 for 2.1.0 | string | Digest pinned for each image. Update or remove when changing `image.version`. |
+| loadgen.enabled  | true | boolean | Deploy the `rs-load` traffic generator. |
+| loadgen.host     | http://traefik.traefik.svc.cluster.local | url | Where the generator sends traffic (through Traefik, so it is measured per API). Use http://web:8080 if Traefik is not installed. Leave off the trailing slash, or requests become `//api/...`. |
+| ingress.enabled  | true | boolean | Create an Ingress with one route per API in front of `web`. |
+| ingress.className | traefik | string | IngressClass that serves the routes (Traefik, installed with `monitoring/traefik-values.yaml`). |
+| ingress.apiPaths | catalogue, cart, payment, user, shipping, ratings | list | APIs that get their own `/api/<name>` route; everything else goes through `/`. |
+| loadgen.clients  | 5 | integer | Number of simulated users. |
+| loadgen.runTime  | 3m | duration | Length of each Locust run; load-gen restarts it in a loop so Locust's per-URL statistics (and memory) are reset. |
+| loadgen.errors   | false | boolean | Also send a deliberately bad payment request (upstream's `ERROR=1`). |
+| rabbitmq.image   | rabbitmq:3.7-management-alpine@sha256:... | string | RabbitMQ image, pinned by digest. |
+| redis.image      | redis:4.0.6@sha256:... | string | Redis image, pinned by digest. |
 | nodeport         | false | booelan | Whether to expose the services via node port. |
 | openshift        | false | boolean | If OpenShift additional configuration is applied. |
 | payment.gateway  | null | string | External URL end-point to simulate partial/3rd party traces. |
-| psp.enabled      | false | boolean | Enable Pod Security Policy for clusters with a PSP Admission controller |
+| payment.image    | "" | string | Full image reference that replaces `robotshop/rs-payment`, e.g. `robot-shop/rs-payment:2.1.0-otel` built from `payment/Dockerfile.otel`. |
+| payment.tracing.enabled | false | boolean | Send OpenTelemetry traces from payment (needs the OTel image above and a collector, see `tracing/README.md`). |
+| payment.tracing.endpoint | http://otel-collector.tracing.svc.cluster.local:4318 | url | OTLP/HTTP endpoint of the collector. |
+| catalogue.resources | 100m/50Mi requests, 200m/100Mi limits | object | Catalogue's CPU and memory. Catalogue also has a readiness probe on `/health` and rolls out with `maxUnavailable: 0` (see `docs/postmortems/2026-10-27-catalogue-oom.md`). |
+| psp.enabled      | false | boolean | Enable Pod Security Policy. PodSecurityPolicy was removed in Kubernetes 1.25, so leave this false on current clusters. |
 | redis.storageClassName | standard | string | Storage class to use with Redis's StatefulSet. The default for EKS is gp2. |
 | ocCreateRoute    | false | boolean | If you are running on OpenShift and need a Route to the web service, set this to `true` |
 | `<workload>`.affinity    | {} | object | Affinity for pod assignment on nodes with matching labels (Refer [here](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity)) |

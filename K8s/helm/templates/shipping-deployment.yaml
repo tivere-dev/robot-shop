@@ -19,15 +19,21 @@ spec:
       {{ end }}
       containers:
       - name: shipping
-        image: {{ .Values.image.repo }}/rs-shipping:{{ .Values.image.version }}
+        image: {{ include "robot-shop.image" (list $ "rs-shipping") | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - containerPort: 8080
         # it's Java it needs lots of memory
         resources:
           limits:
-            cpu: 200m
-            memory: 1000Mi
+            # Upstream used 200m. The JVM was throttled in most scheduling
+            # periods, and some requests stalled until nginx timed out (504).
+            cpu: 1000m
+            # The image starts "java -Xmn256m -Xmx768m": the heap alone may
+            # grow to 768 MiB, and the JVM needs a few hundred MiB more outside
+            # the heap. Upstream's 1000Mi limit was exceeded under load and the
+            # container was OOMKilled, so allow 1280Mi.
+            memory: 1280Mi
           requests:
             cpu: 100m
             memory: 500Mi

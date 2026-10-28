@@ -1,0 +1,74 @@
+# C2-5 evidence: OpenTelemetry Collector -> Jaeger, one real trace from payment
+Recorded 2026-10-27 15:08 UTC on Minikube profile capstone.
+
+## What was deployed
+  jaeger          rev 2  deployed  jaeger-4.16.1
+  otel-collector  rev 1  deployed  opentelemetry-collector-0.177.0
+  robot-shop      rev 8  deployed  robot-shop-1.3.0
+  Jaeger image 2.20.0 (pinned, see note); collector otel/opentelemetry-collector-k8s:0.163.2.
+  payment image robot-shop/rs-payment:2.1.0-otel, built inside Minikube from payment/Dockerfile.otel
+  (published rs-payment 2.1.0 + OpenTelemetry SDK 1.41.1, instrumentation 0.62b1, Python 3.9.6).
+  NAME                               READY  STATUS   RESTARTS
+  jaeger-59478c8967-x9kx9            1/1    Running  0
+  otel-collector-786fb7458d-kwr8w    1/1    Running  0
+  NAME                               READY  STATUS   RESTARTS
+  payment-86d757d98d-tjpw6           1/1    Running  0
+
+## Path of a span
+  payment (Flask + requests auto-instrumentation, manual 'orders publish' span)
+    -> OTLP/HTTP otel-collector.tracing:4318
+    -> memory_limiter -> k8s_attributes (adds k8s.pod.name, k8s.deployment.name ...) -> batch
+    -> OTLP/gRPC jaeger.tracing:4317 -> in-memory store (max 20,000 traces) -> Jaeger UI / Grafana
+
+## One real trace (GET http://localhost:16686/api/traces/6b492fd960bc9ce1a141ec9a0f4de961)
+  trace 6b492fd960bc9ce1a141ec9a0f4de961  (5 spans)
+  span                           start   duration  kind      detail
+  POST /pay/<id>                 0.0ms   2418.5ms  server    /pay/<id> 200
+    GET                         57.2ms      9.2ms  client    http://user:8080/check/anonymous-370 404
+    GET                         69.3ms   2334.4ms  client    https://paypal.com/ 200
+    orders publish            2408.4ms      1.0ms  producer  exchange=robot-shop order=d9b057c9-30c7-413e-9542-1858f23cffbf 
+    DELETE                    2411.7ms      5.7ms  client    http://cart:8080/cart/anonymous-370 200
+  resource: deployment.environment=capstone, k8s.deployment.name=payment, k8s.pod.name=payment-86d757d98d-tjpw6, service.namespace=robot-shop, service.version=2.1.0-otel, telemetry.sdk.version=1.41.1
+
+  Across 22 payment traces from the last hour:
+    POST /pay total:     median    2013 ms   p95    2770 ms   max    3521 ms
+    GET paypal.com:      median    1886 ms   p95    2350 ms   max    2663 ms
+    gateway share of request time: median 95%, min 67%
+  Screenshot of the same trace in the Jaeger UI: docs/evidence/c2-5-trace.jpg
+
+## Finding
+  The dashboard's payment p95 of 8-10 s (C2-3) comes from the payment gateway call, not from
+  Robot Shop: the GET to https://paypal.com/ (a real external site; upstream calls it as a dummy
+  gateway) takes a median 95% of each payment request. The internal calls (user, cart, RabbitMQ)
+  take 1-10 ms each.
+
+## The same request in the logs (Loki: {namespace="robot-shop"} |= "6b492fd960bc9ce1a141ec9a0f4de961")
+   [service=user] {"level":"info","time":1793113626120,"pid":1,"hostname":"user-bd868589c-d52mz","req":{"id":1067,"method":"GET","url":"/check/anonymous-370","headers":
+   [service=payment] [2026-10-27 15:07:06,110] INFO in payment: payment for anonymous-370 trace_id=6b492fd960bc9ce1a141ec9a0f4de961
+   [service=dispatch] 2026/10/27 15:07:08 Headers map[traceparent:00-6b492fd960bc9ce1a141ec9a0f4de961-b722e6774f38c76c-01]
+   [service=cart] {"level":"info","time":1793113628472,"pid":1,"hostname":"cart-6d755b44f9-7mtt2","req":{"id":2148,"method":"DELETE","url":"/cart/anonymous-370","header
+  user and cart log the W3C traceparent header that the requests instrumentation sends; payment
+  logs trace_id=; dispatch logs the traceparent header injected into the RabbitMQ message.
+
+## Grafana
+  Datasource Jaeger (uid jaeger) health: {"message":"Data source is working","status":"OK"}
+  Trace by ID through Grafana's datasource proxy: 5 spans
+  Loki derived field TraceID: matcherRegex trace_id=(\w+) -> Jaeger, so a payment log line links
+  to its trace in Grafana Explore.
+
+## Notes
+- The instructor's OTel config was not provided; tracing/otel-collector-values.yaml is the
+  capstone's own. Only payment is instrumented (the brief asks for one instrumented service).
+- payment.py no longer imports the Instana sensor; requirements.txt swaps instana/opentracing for
+  pinned OpenTelemetry packages (1.41.1 / 0.62b1 are the last releases for Python 3.9).
+- Jaeger was first installed at the chart's 2.22.0. Grafana's Jaeger datasource then failed its
+  health check with '404 Not Found': Jaeger 2.21 removed the old /api/services and /api/traces
+  search endpoints that Grafana 13.2's plugin still calls (grafana/grafana-jaeger-datasource#87).
+  Pinned to 2.20.0 (jaeger rev 2); health check, service list and search work. Traces are kept
+  in memory, so the restart cleared the earlier ones (e.g. 3449c809..., 1,904 ms total with
+  1,800 ms in the paypal.com call).
+- payment memory limit 100Mi -> 192Mi (its peak was already 86 MiB before tracing).
+- 'minikube image build' re-downloaded the 360 MB base image into BuildKit's own cache.
+
+## Resources
+node container: 4.895GiB / 7GiB

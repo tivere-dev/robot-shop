@@ -1,0 +1,162 @@
+# Fluent Bit for the Robot Shop capstone (fluent/fluent-bit chart 0.58.3,
+# Fluent Bit 5.1.3).
+#
+# Runs on the node as a DaemonSet, reads the container log files of the
+# robot-shop and traefik namespaces and sends them to Loki with these labels:
+#   namespace, service, container, level, instana_noise
+# The instructor's Fluent Bit config was not provided, so this is the
+# capstone's own pipeline.
+#
+# Install (from the repository root):
+#   helm install fluent-bit fluent-bit --repo https://fluent.github.io/helm-charts \
+#     --version 0.58.3 -n logging -f logging/fluent-bit-values.yaml
+
+image:
+  tag: 5.1.3
+  digest: sha256:c5542543523c9678398dd78d927c05e8425ec15b038f226b67b3b019b1a70845
+
+# The chart's test pod pulls busybox:latest; not needed
+testFramework:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Minikube uses containerd: logs are under /var/log, not /var/lib/docker
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+
+luaScripts:
+  robot_shop.lua: |
+    -- Adds service, level and instana_noise to each Kubernetes log record.
+    -- Every Robot Shop service logs in its own format, so the level is read
+    -- from whichever form the line uses.
+
+    -- pino (Node.js: cart, catalogue, user) numeric levels
+    local PINO = { [10] = "debug", [20] = "debug", [30] = "info",
+                   [40] = "warn", [50] = "error", [60] = "fatal" }
+    -- MongoDB JSON logs: "s" is the severity letter
+    local MONGO = { D = "debug", I = "info", W = "warn", E = "error", F = "fatal" }
+    -- Level words used by Flask, Spring Boot, Monolog, MySQL, RabbitMQ, nginx
+    local WORDS = { FATAL = "fatal", CRITICAL = "error", ERROR = "error",
+                    ERR = "error", WARNING = "warn", WARN = "warn",
+                    NOTE = "info", NOTICE = "info", INFO = "info",
+                    DEBUG = "debug", TRACE = "debug" }
+
+    local function level_from_line(line)
+      if string.sub(line, 1, 1) == "{" then
+        local n = string.match(line, '"level":%s*(%d+)')
+        if n then return PINO[tonumber(n)] or "unknown" end
+        local s = string.match(line, '"level":%s*"(%a+)"')
+        if s then return WORDS[string.upper(s)] or "unknown" end
+        local m = string.match(line, '"s":%s*"(%u)"')
+        if m then return MONGO[m] or "unknown" end
+      end
+      -- Access logs (nginx in web, uWSGI in payment): use the HTTP status
+      local code = string.match(line, '" (%d%d%d) %d')
+                   or string.match(line, '%(HTTP/[%d.]+ (%d%d%d)%)')
+      if code then
+        local c = tonumber(code)
+        if c >= 500 then return "error" elseif c >= 400 then return "warn" end
+        return "info"
+      end
+      -- Text logs: the earliest level word near the start of the line,
+      -- either in capitals (INFO, php.CRITICAL) or in brackets ([info],
+      -- [Note], [error]). Ordinary words do not count, so
+      -- "[Note] Got an error ..." is info and "Error Percent is 0" is not
+      -- an error.
+      local head = string.sub(line, 1, 120)
+      local best, pos = nil, nil
+      for word, level in pairs(WORDS) do
+        local i = string.find(head, "%f[%w]" .. word .. "%f[%W]")
+        if i and (pos == nil or i < pos) then best, pos = level, i end
+      end
+      for i, word in string.gmatch(head, "()%[(%a+)%]") do
+        local level = WORDS[string.upper(word)]
+        if level and (pos == nil or i < pos) then best, pos = level, i end
+      end
+      return best or "unknown"
+    end
+
+    -- The services still contain Instana sensors that keep looking for an
+    -- Instana agent that does not exist here. Those lines are marked so
+    -- they can be filtered out: {instana_noise="false"}
+    local function is_instana_noise(line)
+      return string.find(line, '"name":"@instana/collector"', 1, true) ~= nil
+          or string.find(line, " instana: ", 1, true) ~= nil
+          or string.find(line, "Instana C++ Sensor", 1, true) ~= nil
+          or string.find(line, "Patching for Instana", 1, true) ~= nil
+          or string.find(line, "agent host candidates", 1, true) ~= nil
+    end
+
+    function add_labels(tag, timestamp, record)
+      local line = record["log"] or ""
+      local k = record["kubernetes"] or {}
+      local labels = k["labels"] or {}
+      record["service"] = labels["service"] or labels["app.kubernetes.io/name"]
+                          or k["container_name"] or "unknown"
+      record["level"] = level_from_line(line)
+      record["instana_noise"] = is_instana_noise(line) and "true" or "false"
+      return 2, timestamp, record
+    end
+
+config:
+  inputs: |
+    [INPUT]
+        Name tail
+        Path /var/log/containers/*_robot-shop_*.log,/var/log/containers/*_traefik_*.log
+        multiline.parser cri
+        Tag kube.*
+        DB /var/log/fluent-bit-capstone.db
+        Read_from_Head On
+        Mem_Buf_Limit 5MB
+        Skip_Long_Lines On
+
+  filters: |
+    # Join stack traces into one log entry: Java in shipping, Python in payment
+    [FILTER]
+        Name multiline
+        Match kube.*_robot-shop_shipping-*
+        multiline.key_content log
+        multiline.parser java
+
+    [FILTER]
+        Name multiline
+        Match kube.*_robot-shop_payment-*
+        multiline.key_content log
+        multiline.parser python
+
+    [FILTER]
+        Name kubernetes
+        Match kube.*
+        Merge_Log Off
+        Labels On
+        Annotations Off
+
+    [FILTER]
+        Name lua
+        Match kube.*
+        script /fluent-bit/scripts/robot_shop.lua
+        call add_labels
+
+  outputs: |
+    [OUTPUT]
+        Name loki
+        Match kube.*
+        Host loki.logging.svc.cluster.local
+        Port 3100
+        Labels job=fluent-bit, namespace=$kubernetes['namespace_name'], service=$service, container=$kubernetes['container_name'], level=$level, instana_noise=$instana_noise
+        Remove_Keys kubernetes, stream, _p, time, service, level, instana_noise
+        Line_Format key_value
+        Drop_Single_Key raw
+        Retry_Limit 5

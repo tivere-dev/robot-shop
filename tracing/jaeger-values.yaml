@@ -1,0 +1,80 @@
+# Jaeger v2 for the Robot Shop capstone (jaegertracing/jaeger chart 4.16.1,
+# Jaeger 2.20.0).
+#
+# Pinned to 2.20.0, not the chart's 2.22.0: Jaeger 2.21 removed the old
+# /api/services and /api/traces search endpoints, which Grafana's Jaeger
+# datasource (Grafana 13.2) still uses for its health check and search
+# (grafana/grafana-jaeger-datasource issue #87).
+#
+# One all-in-one pod that receives OTLP from the OpenTelemetry Collector and
+# keeps traces in memory (lost on restart, capped at 20,000 traces), which is
+# enough for the demo and needs no Elasticsearch or Cassandra.
+#
+# Install (from the repository root):
+#   helm install jaeger jaeger --repo https://jaegertracing.github.io/helm-charts \
+#     --version 4.16.1 -n tracing --create-namespace -f tracing/jaeger-values.yaml
+
+storage:
+  type: memory
+
+jaeger:
+  image:
+    tag: 2.20.0
+    digest: sha256:46a886260e04002d8f45e213fc39063fa11a50446048fdaa64786fc0840cb9f8
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: 200MiB
+
+# Jaeger v2 configuration (an OpenTelemetry Collector config with Jaeger's
+# storage and query extensions)
+userconfig:
+  service:
+    extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [jaeger_storage_exporter]
+    telemetry:
+      resource:
+        service.name: jaeger
+      metrics:
+        level: basic
+        readers:
+          - pull:
+              exporter:
+                prometheus:
+                  host: 0.0.0.0
+                  port: 8888
+  extensions:
+    healthcheckv2:
+      use_v2: true
+      http:
+        endpoint: 0.0.0.0:13133
+    jaeger_query:
+      storage:
+        traces: memstore
+    jaeger_storage:
+      backends:
+        memstore:
+          memory:
+            max_traces: 20000
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  processors:
+    batch: {}
+  exporters:
+    jaeger_storage_exporter:
+      trace_storage: memstore

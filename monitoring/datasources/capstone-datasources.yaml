@@ -1,0 +1,23 @@
+# Grafana datasource provisioning file (loaded by the datasource sidecar)
+apiVersion: 1
+datasources:
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki.logging.svc.cluster.local:3100
+    jsonData:
+      maxLines: 1000
+      # payment logs "trace_id=<id>"; Grafana turns it into a link to Jaeger
+      # ($$ escapes the $ in provisioning files)
+      derivedFields:
+        - name: TraceID
+          matcherRegex: "trace_id=(\\w+)"
+          datasourceUid: jaeger
+          url: "$${__value.raw}"
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger.tracing.svc.cluster.local:16686

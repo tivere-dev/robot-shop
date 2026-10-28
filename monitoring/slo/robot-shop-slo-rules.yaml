@@ -1,0 +1,95 @@
+# Robot Shop availability SLO: recording rules and burn-rate alerts.
+# The SLO and error-budget policy are explained in docs/slo.md.
+#
+#   SLI: share of requests to /api/* (through Traefik) that do not return 5xx
+#   SLO: 99.5% over 28 days  ->  error budget = 0.5% of requests
+#
+# Alerts use the multi-window, multi-burn-rate method from the Google SRE
+# workbook: a burn rate of 1 uses the budget exactly in 28 days; 14.4 uses 2%
+# of it in one hour. Each alert needs a long and a short window so it fires
+# quickly and also stops quickly once the problem is fixed.
+#
+# Apply (from the repository root):
+#   kubectl apply -f monitoring/slo/robot-shop-slo-rules.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: robot-shop-slo
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: robot-shop
+spec:
+  groups:
+    - name: robot-shop-slo.recording
+      interval: 30s
+      rules:
+        # Error ratio (5xx / all) over several windows. "or vector(0)" keeps
+        # the ratio at 0 when there were no 5xx responses at all.
+        - record: robotshop:api_error_ratio:rate5m
+          expr: |
+            (sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes",code=~"5.."}[5m])) or vector(0))
+            / sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes"}[5m]))
+        - record: robotshop:api_error_ratio:rate30m
+          expr: |
+            (sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes",code=~"5.."}[30m])) or vector(0))
+            / sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes"}[30m]))
+        - record: robotshop:api_error_ratio:rate1h
+          expr: |
+            (sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes",code=~"5.."}[1h])) or vector(0))
+            / sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes"}[1h]))
+        - record: robotshop:api_error_ratio:rate6h
+          expr: |
+            (sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes",code=~"5.."}[6h])) or vector(0))
+            / sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes"}[6h]))
+        - record: robotshop:api_error_ratio:rate1d
+          expr: |
+            (sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes",code=~"5.."}[1d])) or vector(0))
+            / sum(rate(traefik_router_requests_total{router=~"robot-shop-robot-shop-api-.+@kubernetes"}[1d]))
+        # Burn rate over the last hour: 1 = on track to use exactly the budget
+        - record: robotshop:api_error_budget_burn_rate:1h
+          expr: robotshop:api_error_ratio:rate1h / 0.005
+        # Share of the 28-day budget used by the last 24 hours (Prometheus keeps
+        # only 24h locally, so the full 28-day window cannot be computed here)
+        - record: robotshop:api_error_budget_used_by_last_1d:ratio
+          expr: robotshop:api_error_ratio:rate1d / (0.005 * 28)
+
+    - name: robot-shop-slo.alerts
+      rules:
+        - alert: RobotShopErrorBudgetFastBurn
+          # 14.4x burn: 2% of the 28-day budget gone in 1 hour
+          expr: |
+            robotshop:api_error_ratio:rate1h > (14.4 * 0.005)
+            and
+            robotshop:api_error_ratio:rate5m > (14.4 * 0.005)
+          for: 2m
+          # Do not send RESOLVED just because data is missing for a few minutes
+          # (a data gap made the drill on 27 Oct send a false RESOLVED)
+          keep_firing_for: 10m
+          labels:
+            severity: critical
+            slo: robot-shop-availability
+          annotations:
+            summary: Robot Shop API is failing fast enough to use the 28-day error budget in about 2 days
+            description: >-
+              {{ $value | humanizePercentage }} of /api requests returned 5xx over the last hour
+              (SLO allows 0.5%). Check the dashboard for which API is failing.
+            runbook_url: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md
+            dashboard: http://localhost:3000/d/robot-shop-red
+        - alert: RobotShopErrorBudgetSlowBurn
+          # 6x burn: 5% of the 28-day budget gone in 6 hours
+          expr: |
+            robotshop:api_error_ratio:rate6h > (6 * 0.005)
+            and
+            robotshop:api_error_ratio:rate30m > (6 * 0.005)
+          for: 15m
+          keep_firing_for: 10m
+          labels:
+            severity: warning
+            slo: robot-shop-availability
+          annotations:
+            summary: Robot Shop API errors are using the error budget faster than planned
+            description: >-
+              {{ $value | humanizePercentage }} of /api requests returned 5xx over the last 6 hours
+              (SLO allows 0.5%).
+            runbook_url: https://github.com/tivere-dev/robot-shop/blob/master/docs/runbooks/robot-shop-availability.md
+            dashboard: http://localhost:3000/d/robot-shop-red

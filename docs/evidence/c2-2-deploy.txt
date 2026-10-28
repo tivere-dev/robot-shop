@@ -1,0 +1,289 @@
+# Capstone 2, stage C2-2: Robot Shop deployed to the local Capstone 1 cluster
+# Captured: 2026-10-26 11:03 UTC. LOCAL Minikube profile 'capstone' (not AWS EKS).
+# Chart: K8s/helm from branch c2/chart-cleanup at commit 6590b0f
+
+## Cluster (recreated with scripts/local-cluster.sh from Capstone 1: CPUS=4 MEMORY_MB=7168)
+$ minikube profile list
+┌──────────┬────────┬────────────┬──────────────┬─────────┬─────────┬───────┬────────────────┬────────────────────┐
+│ PROFILE  │ DRIVER │  RUNTIME   │      IP      │ VERSION │ STATUS  │ NODES │ ACTIVE PROFILE │ ACTIVE KUBECONTEXT │
+├──────────┼────────┼────────────┼──────────────┼─────────┼─────────┼───────┼────────────────┼────────────────────┤
+│ capstone │ docker │ containerd │ 192.168.58.2 │ v1.37.0 │ OK      │ 1     │                │                    │
+│ minikube │ docker │ containerd │ 192.168.49.2 │ v1.37.0 │ Stopped │ 1     │ *              │ *                  │
+└──────────┴────────┴────────────┴──────────────┴─────────┴─────────┴───────┴────────────────┴────────────────────┘
+
+$ kubectl get nodes
+NAME       STATUS   ROLES           AGE   VERSION   INTERNAL-IP    EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION             CONTAINER-RUNTIME
+capstone   Ready    control-plane   18m   v1.37.0   192.168.58.2   <none>        Debian GNU/Linux 12 (bookworm)   6.10.14-linuxkit (amd64)   containerd://2.3.4
+
+$ helm list -A
+NAME      	NAMESPACE 	REVISION	UPDATED                             	STATUS  	CHART           	APP VERSION
+robot-shop	robot-shop	2       	2026-10-26 12:01:10.778611 +0100 WAT	deployed	robot-shop-1.2.0	2.1.0      
+voting-app	voting-app	1       	2026-10-26 11:45:39.331106 +0100 WAT	deployed	voting-app-0.1.0	capstone-1 
+
+## Robot Shop release history
+$ helm -n robot-shop history robot-shop
+REVISION	UPDATED                 	STATUS    	CHART           	APP VERSION	DESCRIPTION                                                                                                                       
+1       	Mon Oct 26 11:46:33 2026	superseded	robot-shop-1.2.0	2.1.0      	Release "robot-shop" failed: resource Deployment/robot-shop/ratings not ready. status: Failed, message: Progress deadline excee...
+2       	Mon Oct 26 12:01:10 2026	deployed  	robot-shop-1.2.0	2.1.0      	Upgrade complete                                                                                                                  
+
+What happened:
+- Revision 1 (helm install --wait --timeout 25m) failed after 603 s with
+  "Deployment/robot-shop/ratings ... shipping not ready ... Progress deadline
+  exceeded". Kubernetes gives each Deployment 600 s by default.
+- Cause: on first start MySQL imports 10-dump.sql.gz (the shipping city list)
+  into a temporary server that listens on no TCP port, so ratings and shipping
+  got "Connection refused" until the import finished. MySQL has no readiness
+  probe in the upstream chart, so it looked ready during the import. Its
+  0.2 CPU limit made the import slow: cgroup cpu.stat showed about 36 s of CPU
+  used and about 171 s throttled at 10:57 UTC.
+- MySQL logged "ready for connections ... port: 3306" at 10:58:47 UTC. ratings
+  and shipping became ready by 11:00:50 UTC with 0 restarts and no changes.
+- Revision 2 (helm upgrade --reuse-values, same chart and values) recorded the
+  healthy state. No pod was restarted or replaced.
+
+## Pods
+$ kubectl -n robot-shop get pods
+NAME                         READY   STATUS    RESTARTS   AGE   IP            NODE       NOMINATED NODE   READINESS GATES
+cart-6d755b44f9-7mtt2        1/1     Running   0          17m   10.244.0.15   capstone   <none>           <none>
+catalogue-54444cd97b-zpsz5   1/1     Running   0          17m   10.244.0.20   capstone   <none>           <none>
+dispatch-84f46f8558-c4m2t    1/1     Running   0          17m   10.244.0.19   capstone   <none>           <none>
+load-68f9f564c8-h984m        1/1     Running   0          17m   10.244.0.12   capstone   <none>           <none>
+mongodb-6966487cbb-js22g     1/1     Running   0          17m   10.244.0.14   capstone   <none>           <none>
+mysql-866f79d89c-psdbd       1/1     Running   0          17m   10.244.0.16   capstone   <none>           <none>
+payment-68589c8dcf-gfbdp     1/1     Running   0          17m   10.244.0.10   capstone   <none>           <none>
+rabbitmq-675ffbbcbc-74kwf    1/1     Running   0          17m   10.244.0.13   capstone   <none>           <none>
+ratings-6b669bb999-rj5zp     1/1     Running   0          17m   10.244.0.11   capstone   <none>           <none>
+redis-0                      1/1     Running   0          17m   10.244.0.18   capstone   <none>           <none>
+shipping-847d68db8d-p29bd    1/1     Running   0          17m   10.244.0.8    capstone   <none>           <none>
+user-bd868589c-d52mz         1/1     Running   0          17m   10.244.0.9    capstone   <none>           <none>
+web-7d7ddd4754-rmmqv         1/1     Running   0          17m   10.244.0.17   capstone   <none>           <none>
+
+$ kubectl -n robot-shop get pods (images)
+POD                          IMAGE
+cart-6d755b44f9-7mtt2        robotshop/rs-cart:2.1.0@sha256:388349d5cb3ccc14a192c345bfd42596920737db35d6a03a27457f6682710a37
+catalogue-54444cd97b-zpsz5   robotshop/rs-catalogue:2.1.0@sha256:d545747c1b97cd2e0f41221291cd2f66781bceabaab2cfd42a7be4b8c2f3ba62
+dispatch-84f46f8558-c4m2t    robotshop/rs-dispatch:2.1.0@sha256:de81f1d07b021f24c1cc66fef6aa27f9a5456f08b0c081dfb4cc71027ff67ead
+load-68f9f564c8-h984m        robotshop/rs-load:2.1.0@sha256:4041f38cb4d4c0263246dc4ceec493c5cd88e3be32b3292bd4960a1bceb8bd0e
+mongodb-6966487cbb-js22g     robotshop/rs-mongodb:2.1.0@sha256:119b545823cdce33a1d6cee87fdfed1cef82e680824ad0b49603be4aeb4e821e
+mysql-866f79d89c-psdbd       robotshop/rs-mysql-db:2.1.0@sha256:2355f9700d771f4326169d7d370ad1824d2d410876036f77342d9663d80f893b
+payment-68589c8dcf-gfbdp     robotshop/rs-payment:2.1.0@sha256:774b52c6180d8f3273f77230d70ace9c45e1f8909e21e10a19ed83b1cec53bb3
+rabbitmq-675ffbbcbc-74kwf    rabbitmq:3.7-management-alpine@sha256:e97f6bb68aab3f747f8a6f4dc52ed57401de91ca480a0be3a36e7476ac273169
+ratings-6b669bb999-rj5zp     robotshop/rs-ratings:2.1.0@sha256:4899c686c249464783663342620425dc8c75a5d59ca55c247cf6aec62a5fff1a
+redis-0                      redis:4.0.6@sha256:0e773022cd6572a5153e5013afced0f7191652d3cdf9b1c6785eb13f6b2974b1
+shipping-847d68db8d-p29bd    robotshop/rs-shipping:2.1.0@sha256:89753ab489193286402c9486379da63c18a21d697b4fbd41246b68aacabfc6d3
+user-bd868589c-d52mz         robotshop/rs-user:2.1.0@sha256:ea509182c180d20340a9427d8320f35085effdb4ed77b15275022d17bdd1fcf7
+web-7d7ddd4754-rmmqv         robotshop/rs-web:2.1.0@sha256:b3c20d4a22f2875397726d2184062360bb2ab9c8776beffca7c2e7b3652893bc
+
+$ kubectl -n robot-shop get svc
+NAME        TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)                       AGE
+cart        ClusterIP      10.101.76.18     <none>        8080/TCP                      17m
+catalogue   ClusterIP      10.97.184.133    <none>        8080/TCP                      17m
+dispatch    ClusterIP      None             <none>        55555/TCP                     17m
+mongodb     ClusterIP      10.111.157.160   <none>        27017/TCP                     17m
+mysql       ClusterIP      10.103.119.36    <none>        3306/TCP                      17m
+payment     ClusterIP      10.109.78.179    <none>        8080/TCP                      17m
+rabbitmq    ClusterIP      10.102.82.30     <none>        5672/TCP,15672/TCP,4369/TCP   17m
+ratings     ClusterIP      10.103.49.56     <none>        80/TCP                        17m
+redis       ClusterIP      10.100.198.150   <none>        6379/TCP                      17m
+shipping    ClusterIP      10.110.24.35     <none>        8080/TCP                      17m
+user        ClusterIP      10.96.234.237    <none>        8080/TCP                      17m
+web         LoadBalancer   10.101.135.153   <pending>     8080:30512/TCP                17m
+
+## Instana settings removed from the chart
+$ kubectl -n robot-shop get deploy -o yaml | grep -c INSTANA
+0
+
+## Traffic: web (nginx) access log, last 2 minutes, by API and status
+  76 cart 200
+  78 catalogue 200
+   1 catalogue 304
+  39 fetch 200
+  24 payment 200
+  16 rate 200
+  82 shipping 200
+  43 user 200
+
+Last shipping 502 seen (during the MySQL import):
+[26/Oct/2026:11:00:40 +0000]
+
+## Load generator
+Starting load with 5 clients
+Starting  clients for ever
+HOST=http://web:8080/
+NUM_CLIENTS=5
+SILENT=1
+ERROR=0
+
+## Shop checks through kubectl port-forward svc/web 8084:8080
+GET / -> HTTP 200
+GET /api/catalogue/products -> 11 products
+GET /api/ratings/api/fetch/Watson -> {"avg_rating":4.5,"rating_count":2}
+GET /api/shipping/codes -> HTTP 200
+Browser: http://localhost:8084 showed the "Stan's Robot Shop" home page with its categories.
+
+## Known issue: Instana libraries inside the images keep looking for an agent
+[web] 2026-10-26 11:03:43, 19 [lis] Error: lookup requests for all agent host candidates failed
+[catalogue] {"name":"@instana/collector","__in":1,"hostname":"catalogue-54444cd97b-zpsz5","pid":1,"module":"announceCycle/agentHostLookup","level":40,"msg":"Agent cannot be contacted via 127.0.0.1:42699 nor via d
+[dispatch] 2026/10/26 11:03:17 instana: ERROR: cannot connect to the agent through localhost or default gateway, scheduling retry
+
+## Resource use (measured)
+$ docker stats capstone
+capstone 3.169GiB / 7GiB CPU 92.50%
+$ minikube ssh -- sudo crictl stats  (working-set memory per namespace, MiB)
+kube-system   498 MiB
+robot-shop   1279 MiB
+voting-app    227 MiB
+Largest Robot Shop containers: shipping (Java) ~550 MiB, mysql ~275 MiB, rabbitmq ~95 MiB.
+
+## Chart fixes applied as revision 3 (helm upgrade without --reuse-values)
+Captured: 2026-10-26 12:01 UTC
+$ helm -n robot-shop history robot-shop
+REVISION	UPDATED                 	STATUS    	CHART           	APP VERSION	DESCRIPTION                                                                                                                       
+1       	Mon Oct 26 11:46:33 2026	superseded	robot-shop-1.2.0	2.1.0      	Release "robot-shop" failed: resource Deployment/robot-shop/ratings not ready. status: Failed, message: Progress deadline excee...
+2       	Mon Oct 26 12:01:10 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                                                                                                                  
+3       	Mon Oct 26 12:58:34 2026	deployed  	robot-shop-1.2.0	2.1.0      	Upgrade complete                                                                                                                  
+
+1. MySQL readiness probe (tcpSocket 3306) and CPU limit 200m -> 1000m:
+readinessProbe={"failureThreshold":3,"initialDelaySeconds":10,"periodSeconds":5,"successThreshold":1,"tcpSocket":{"port":3306},"timeoutSeconds":2}
+resources={"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"100m","memory":"700Mi"}}
+During the upgrade the new MySQL pod re-imported its data and reported not ready
+("Readiness probe failed: dial tcp ...:3306: connect: connection refused" at 11:59:41 UTC);
+the old pod was only removed at 11:59:47 UTC. ratings (which uses MySQL) returned
+HTTP 200 in all 18 checks taken every ~3 s during the upgrade:
+11:58:34 shipping=502 ratings=200
+11:58:37 shipping=502 ratings=200
+11:58:40 shipping=502 ratings=200
+11:58:43 shipping=502 ratings=200
+11:58:46 shipping=502 ratings=200
+11:58:49 shipping=502 ratings=200
+11:58:52 shipping=502 ratings=200
+11:58:55 shipping=502 ratings=200
+11:58:58 shipping=502 ratings=200
+11:59:01 shipping=200 ratings=200
+11:59:08 shipping=200 ratings=200
+11:59:13 shipping=200 ratings=200
+11:59:17 shipping=000 ratings=200
+11:59:24 shipping=000 ratings=200
+11:59:31 shipping=000 ratings=200
+11:59:38 shipping=200 ratings=200
+11:59:43 shipping=200 ratings=200
+11:59:47 shipping=000 ratings=200
+
+2. load-gen host without trailing slash:
+HOST=http://web:8080
+Last "//api" request: 11:59:06 UTC (the old load pod, while the new one started at 11:58:35).
+Load-gen requests in the 2 minutes before 12:01:21 UTC: 0 with "//api", 88 with "/api".
+
+3. Instana log noise: not changed in the chart (would need five image rebuilds).
+Documented in K8s/helm/README.md; to be excluded from error-level searches in the logging stage.
+
+## New finding, NOT fixed: shipping is OOMKilled
+restarts=2 lastState=OOMKilled exitCode=137 finishedAt=2026-10-26T11:54:45Z
+The shipping image starts "java -Xmn256m -Xmx768m -jar shipping.jar" (upstream Dockerfile);
+the chart limits the container to 1000Mi. Heap (up to 768 MiB) plus JVM non-heap memory exceeds
+the limit under load. The shipping 502s / timeouts in the availability log above
+(11:58:34-11:58:58 and 11:59:17-11:59:47 UTC) match its restart after the OOM kill at 11:54:45 UTC,
+not the MySQL change.
+
+## Shipping memory limit 1000Mi -> 1280Mi (revision 4)
+Captured: 2026-10-26 12:25 UTC
+Before the change the old shipping pod had 3 restarts, the last OOMKilled at 12:02:15 UTC.
+$ helm -n robot-shop history robot-shop
+REVISION	UPDATED                 	STATUS    	CHART           	APP VERSION	DESCRIPTION                                   
+1       	Mon Oct 26 11:46:33 2026	superseded	robot-shop-1.2.0	2.1.0      	Release "robot-shop" failed: resource Deployme
+2       	Mon Oct 26 12:01:10 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+3       	Mon Oct 26 12:58:34 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+4       	Mon Oct 26 13:03:47 2026	deployed  	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+
+$ kubectl -n robot-shop get pod -l service=shipping (limit and restarts)
+shipping-df7d77d56-lf2kf limit=1280Mi restarts=0 started=2026-10-26T12:03:48Z
+
+### 16-minute watch, one sample per minute (memory = container working set from crictl;
+### http = my own curl to /api/shipping/codes through port-forward, 5 s timeout, 000 = no answer in 5 s)
+time_utc pod restarts ready mem_MiB http
+12:08:06 shipping-df7d77d56-lf2kf 0 true - 641
+12:09:07 shipping-df7d77d56-lf2kf 0 true - 534
+12:10:09 shipping-df7d77d56-lf2kf 0 true - 556
+12:11:15 shipping-df7d77d56-lf2kf 0 true - 637
+12:12:18 shipping-df7d77d56-lf2kf 0 true - 703
+12:13:24 shipping-df7d77d56-lf2kf 0 true - 738
+12:14:27 shipping-df7d77d56-lf2kf 0 true - 836
+12:15:28 shipping-df7d77d56-lf2kf 0 true - 821
+12:16:29 shipping-df7d77d56-lf2kf 0 true - 818
+12:17:35 shipping-df7d77d56-lf2kf 0 true - 820
+12:18:36 shipping-df7d77d56-lf2kf 0 true - 831
+12:19:37 shipping-df7d77d56-lf2kf 0 true - 833
+12:20:38 shipping-df7d77d56-lf2kf 0 true - 833
+12:21:40 shipping-df7d77d56-lf2kf 0 true - 795
+12:22:41 shipping-df7d77d56-lf2kf 0 true - 796
+12:23:42 shipping-df7d77d56-lf2kf 0 true - 797
+12:24:42 shipping-df7d77d56-lf2kf 0 true - 797
+
+Result:
+- No restarts and no OOM kill in 16 minutes. Peak working set about 836 MiB, settling
+  around 797 MiB, under the 1280Mi limit. The memory fix worked.
+- Shipping responses seen by web (all clients) from 12:08 UTC:
+     574 HTTP/1.1" 200
+       2 HTTP/1.1" 499
+       1 HTTP/1.1" 502
+       7 HTTP/1.1" 504
+- nginx logged "upstream timed out" for shipping in that window, e.g.:
+    2026/10/26 12:12:58 [error] 15#15: *10033 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 10.244.0.22, serve
+
+## New finding, NOT fixed: shipping is CPU-throttled
+$ kubectl exec deploy/shipping -- cat /sys/fs/cgroup/cpu.stat
+usage_usec 176926786
+nr_periods 10351
+nr_throttled 8612
+throttled_usec 2939603338
+Shipping's CPU limit is 200m. It was throttled in most scheduling periods, which matches
+the slow responses and the 504 timeouts above.
+
+## Shipping CPU limit 200m -> 1000m (revision 5)
+Captured: 2026-10-26 13:16 UTC
+$ helm -n robot-shop history robot-shop
+REVISION	UPDATED                 	STATUS    	CHART           	APP VERSION	DESCRIPTION                                   
+1       	Mon Oct 26 11:46:33 2026	superseded	robot-shop-1.2.0	2.1.0      	Release "robot-shop" failed: resource Deployme
+2       	Mon Oct 26 12:01:10 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+3       	Mon Oct 26 12:58:34 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+4       	Mon Oct 26 13:03:47 2026	superseded	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+5       	Mon Oct 26 13:58:37 2026	deployed  	robot-shop-1.2.0	2.1.0      	Upgrade complete                              
+
+$ kubectl -n robot-shop get pod -l service=shipping
+shipping-557d6f96c5-69499 limits={"cpu":"1","memory":"1280Mi"} restarts=0 started=2026-10-26T12:58:38Z
+Upgrade took 57 s (revision 4 with 200m took 244 s, mostly the JVM starting).
+
+### 16-minute watch, one sample per minute
+### (throttled = CPU periods throttled during the previous minute / periods in that minute)
+time_utc restarts ready mem_MiB http throttled_periods_last_min/periods
+13:00:59 0 true 660 200 20/241
+13:02:00 0 true 638 200 65/318
+13:03:01 0 true 632 200 9/274
+13:04:03 0 true 652 200 56/264
+13:05:04 0 true 592 200 30/300
+13:06:05 0 true 593 200 7/245
+13:07:06 0 true 594 200 25/263
+13:08:06 0 true 596 200 10/264
+13:09:08 0 true 597 200 35/281
+13:10:11 0 true 598 200 18/265
+13:11:12 0 true 616 200 42/248
+13:12:13 0 true 626 200 21/248
+13:13:14 0 true 650 200 92/292
+13:14:16 0 true 716 200 67/316
+13:15:16 0 true 771 200 49/270
+13:16:17 0 true 772 200 32/287
+
+Result, compared with the 16-minute watch at 200m:
+| | 200m (12:08-12:25 UTC) | 1000m (13:00-13:16 UTC) |
+|---|---|---|
+| Shipping responses seen by web | 574x 200, 7x 504, 1x 502, 2x 499 | 767x 200 |
+| nginx upstream errors for shipping | 9 | 0 |
+| My 5 s checks answered | 14 of 17 | 16 of 16 |
+| Restarts | 0 (after the memory fix) | 0 |
+| CPU periods throttled | 8612 of 10351 (83%, since pod start) | 578/4376 (13.2%) during the watch |
+| Working-set memory | 534-836 MiB | 592-772 MiB |
+
+Throttling still happens in short bursts at 1 CPU, but no request timed out.
+
+Cluster after the change:
+capstone 3.646GiB / 7GiB CPU 55.21%

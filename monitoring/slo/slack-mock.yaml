@@ -1,0 +1,95 @@
+# A stand-in for Slack's incoming-webhook endpoint, used because no real
+# Slack workspace is connected in this local setup. It accepts the same POST
+# Alertmanager would send to hooks.slack.com and prints the message text to
+# its log, so routing and message content can be checked end to end.
+#
+# To use real Slack instead, put your webhook URL in the Secret (see
+# docs/runbooks/robot-shop-availability.md); this mock is then unused.
+#
+# Apply: kubectl apply -f monitoring/slo/slack-mock.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slack-mock
+  namespace: monitoring
+data:
+  server.py: |
+    import json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Hook(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            try:
+                msg = json.loads(body)
+                for a in msg.get("attachments", []):
+                    print("SLACK", json.dumps({"channel": msg.get("channel"),
+                                               "title": a.get("title"),
+                                               "text": a.get("text"),
+                                               "color": a.get("color")}), flush=True)
+            except ValueError:
+                print("SLACK (not JSON)", body[:500], flush=True)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    HTTPServer(("0.0.0.0", 8080), Hook).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-mock
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slack-mock
+  template:
+    metadata:
+      labels:
+        app: slack-mock
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: slack-mock
+          image: python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
+          command: ["python", "-u", "/app/server.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 48Mi
+      volumes:
+        - name: app
+          configMap:
+            name: slack-mock
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slack-mock
+  namespace: monitoring
+spec:
+  selector:
+    app: slack-mock
+  ports:
+    - port: 8080
+      targetPort: 8080

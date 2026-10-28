@@ -1,16 +1,58 @@
-# Registry and repository for Docker images
-# Default is docker/robotshop/image:latest
+# Registry and repository for Docker images.
+# Pinned to release 2.1.0 (the same images as "latest", checked 26 Oct 2026)
+# and to each image's digest, so a re-pushed tag cannot change what runs.
 image:
   repo: robotshop
-  version: latest
+  version: 2.1.0
   pullPolicy: IfNotPresent
+  # Digests for version 2.1.0. Update or remove them if the version changes.
+  digests:
+    rs-cart: sha256:388349d5cb3ccc14a192c345bfd42596920737db35d6a03a27457f6682710a37
+    rs-catalogue: sha256:d545747c1b97cd2e0f41221291cd2f66781bceabaab2cfd42a7be4b8c2f3ba62
+    rs-dispatch: sha256:de81f1d07b021f24c1cc66fef6aa27f9a5456f08b0c081dfb4cc71027ff67ead
+    rs-load: sha256:4041f38cb4d4c0263246dc4ceec493c5cd88e3be32b3292bd4960a1bceb8bd0e
+    rs-mongodb: sha256:119b545823cdce33a1d6cee87fdfed1cef82e680824ad0b49603be4aeb4e821e
+    rs-mysql-db: sha256:2355f9700d771f4326169d7d370ad1824d2d410876036f77342d9663d80f893b
+    rs-payment: sha256:774b52c6180d8f3273f77230d70ace9c45e1f8909e21e10a19ed83b1cec53bb3
+    rs-ratings: sha256:4899c686c249464783663342620425dc8c75a5d59ca55c247cf6aec62a5fff1a
+    rs-shipping: sha256:89753ab489193286402c9486379da63c18a21d697b4fbd41246b68aacabfc6d3
+    rs-user: sha256:ea509182c180d20340a9427d8320f35085effdb4ed77b15275022d17bdd1fcf7
+    rs-web: sha256:b3c20d4a22f2875397726d2184062360bb2ab9c8776beffca7c2e7b3652893bc
 
-# EUM configuration
-# Provide your key and set the endpoint
-eum:
-  key: null
-  url: https://eum-eu-west-1.instana.io
-  #url: https://eum-us-west-2.instana.io
+# Ingress routes in front of `web`, served by Traefik (installed separately with
+# monitoring/traefik-values.yaml). Each API gets its own route so request
+# rate, errors and latency are reported per API.
+ingress:
+  enabled: true
+  className: traefik
+  apiPaths:
+    - catalogue
+    - cart
+    - payment
+    - user
+    - shipping
+    - ratings
+
+# The Instana agent and Instana end-user monitoring (EUM) settings were removed
+# for this capstone. Monitoring is done with Prometheus, Loki and Jaeger instead.
+
+# Load generator (rs-load). Sends steady traffic to the shop.
+loadgen:
+  enabled: true
+  # Where to send traffic. It goes through Traefik so every request is
+  # measured per API. Without Traefik installed, use http://web:8080.
+  # No trailing slash: load-gen appends paths that already start with "/",
+  # and a trailing slash produced requests like "//api/cart/...".
+  host: http://traefik.traefik.svc.cluster.local
+  # Upstream's manifest uses 15; 5 is lighter for a laptop cluster.
+  clients: 5
+  # Each Locust run lasts this long, then restarts with empty statistics
+  # (format 2h42m). Prevents the memory growth that OOMKilled load-gen.
+  runTime: 3m
+  # true adds a task that sends a bad payment request on purpose (upstream
+  # default). Off by default so the error rate reflects real failures; it can
+  # be switched on as a fault for the incident drill.
+  errors: false
 
 # Pod Security Policy
 psp:
@@ -35,7 +77,15 @@ ocCreateRoute: false
 
 cart: {}
 
-catalogue: {}
+catalogue:
+  # Node.js uses about 40-50 MiB under the load generator
+  resources:
+    limits:
+      cpu: 200m
+      memory: 100Mi
+    requests:
+      cpu: 100m
+      memory: 50Mi
 
 dispatch: {}
 
@@ -48,12 +98,25 @@ payment:
   # Default is https://www.paypal.com
   gateway: null
   #gateway: https://www.worldpay.com
+  # Full image reference that replaces robotshop/rs-payment, e.g. the
+  # OpenTelemetry build from payment/Dockerfile.otel. Empty = upstream image.
+  image: ""
+  # OpenTelemetry tracing (needs an image built from payment/Dockerfile.otel
+  # and a collector; see tracing/README.md)
+  tracing:
+    enabled: false
+    # OTLP over HTTP; the SDK adds /v1/traces
+    endpoint: http://otel-collector.tracing.svc.cluster.local:4318
 
-rabbitmq: {}
+rabbitmq:
+  # Upstream's tag, pinned by digest (multi-arch index)
+  image: rabbitmq:3.7-management-alpine@sha256:e97f6bb68aab3f747f8a6f4dc52ed57401de91ca480a0be3a36e7476ac273169
 
 ratings: {}
 
 redis:
+  # Upstream's tag, pinned by digest (multi-arch index)
+  image: redis:4.0.6@sha256:0e773022cd6572a5153e5013afced0f7191652d3cdf9b1c6785eb13f6b2974b1
   # Storage class to use with redis statefulset.
   storageClassName: standard
 

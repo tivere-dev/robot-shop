@@ -1,0 +1,157 @@
+# Capstone 2 CI: checks the Helm chart, the observability configuration and
+# the traced payment image. It builds nothing for release and publishes
+# nothing: no registry login, no pushes, read-only token.
+#
+# Replaces upstream's push.yml (a docker-compose build of all images on
+# master), which tested none of the capstone changes and relied on the
+# old standalone docker-compose command.
+name: capstone-ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: v4.3.1
+  PYYAML_VERSION: 6.0.3
+  # Tools run from images pinned by digest
+  PROMETHEUS_IMAGE: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+  KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+  FLUENT_BIT_IMAGE: cr.fluentbit.io/fluent/fluent-bit:5.1.3@sha256:c5542543523c9678398dd78d927c05e8425ec15b038f226b67b3b019b1a70845
+
+jobs:
+  charts:
+    name: Helm charts and values
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Lint the Robot Shop chart
+        run: |
+          helm lint K8s/helm
+          helm lint K8s/helm -f tracing/robot-shop-tracing-values.yaml
+
+      - name: Render the Robot Shop chart (default, tracing on, incident drill)
+        run: |
+          mkdir -p rendered
+          helm template robot-shop K8s/helm -n robot-shop > rendered/robot-shop-default.yaml
+          helm template robot-shop K8s/helm -n robot-shop \
+            -f tracing/robot-shop-tracing-values.yaml > rendered/robot-shop-tracing.yaml
+          helm template robot-shop K8s/helm -n robot-shop \
+            -f tracing/robot-shop-tracing-values.yaml \
+            -f docs/drills/2026-10-27-bad-release-values.yaml > rendered/robot-shop-drill.yaml
+          cp monitoring/slo/slack-mock.yaml rendered/
+
+      - name: Validate the manifests against the Kubernetes schemas
+        run: |
+          docker run --rm -v "$PWD/rendered:/r:ro" "$KUBECONFORM_IMAGE" \
+            -strict -summary -kubernetes-version 1.37.0 /r
+
+      # The values files only work with the chart versions they were written
+      # for; rendering catches unknown keys and schema errors. There is no
+      # cluster here, so tell Helm the Prometheus Operator API exists:
+      # otherwise Traefik refuses to render its ServiceMonitor.
+      - name: Render the third-party charts with this repo's values
+        env:
+          HELM_TEMPLATE: helm template --api-versions monitoring.coreos.com/v1
+        run: |
+          set -x
+          $HELM_TEMPLATE traefik oci://ghcr.io/traefik/helm/traefik --version 42.1.3 \
+            -n traefik -f monitoring/traefik-values.yaml > /dev/null
+          $HELM_TEMPLATE monitoring oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack \
+            --version 92.14.0 -n monitoring -f monitoring/kube-prometheus-stack-values.yaml > /dev/null
+          $HELM_TEMPLATE loki loki --repo https://grafana.github.io/helm-charts --version 7.5.0 \
+            -n logging -f logging/loki-values.yaml > /dev/null
+          $HELM_TEMPLATE fluent-bit fluent-bit --repo https://fluent.github.io/helm-charts \
+            --version 0.58.3 -n logging -f logging/fluent-bit-values.yaml > rendered/fluent-bit.yaml
+          $HELM_TEMPLATE jaeger jaeger --repo https://jaegertracing.github.io/helm-charts \
+            --version 4.16.1 -n tracing -f tracing/jaeger-values.yaml > /dev/null
+          $HELM_TEMPLATE otel-collector opentelemetry-collector \
+            --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+            --version 0.177.0 -n tracing -f tracing/otel-collector-values.yaml > /dev/null
+
+      - name: Set up PyYAML
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyyaml==$PYYAML_VERSION"
+
+      - name: Dry-run the Fluent Bit configuration and Lua script
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" ci/configmap-to-files.py rendered/fluent-bit.yaml fluent-bit fb/conf
+          "$RUNNER_TEMP/venv/bin/python" ci/configmap-to-files.py rendered/fluent-bit.yaml fluent-bit-luascripts fb/scripts
+          docker run --rm \
+            -v "$PWD/fb/conf:/fluent-bit/etc/conf:ro" -v "$PWD/fb/scripts:/fluent-bit/scripts:ro" \
+            "$FLUENT_BIT_IMAGE" /fluent-bit/bin/fluent-bit --dry-run -c /fluent-bit/etc/conf/fluent-bit.conf
+
+  alerts-and-dashboard:
+    name: SLO rules and dashboard queries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up PyYAML
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyyaml==$PYYAML_VERSION"
+
+      - name: Convert the PrometheusRule and the dashboard queries to rule files
+        run: |
+          mkdir -p promtool
+          "$RUNNER_TEMP/venv/bin/python" ci/prometheusrule-to-rules.py \
+            monitoring/slo/robot-shop-slo-rules.yaml promtool/slo-rules.yaml
+          "$RUNNER_TEMP/venv/bin/python" ci/dashboard-queries-to-rules.py \
+            monitoring/dashboards/robot-shop-red.json promtool/dashboard-rules.yaml
+          cp monitoring/slo/robot-shop-slo-rules.test.yaml promtool/
+
+      - name: Check the SLO rules and every dashboard query (promtool)
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/promtool:/w:ro" -w /w "$PROMETHEUS_IMAGE" \
+            check rules slo-rules.yaml dashboard-rules.yaml
+
+      - name: Unit-test the burn-rate alerts (promtool)
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/promtool:/w:ro" -w /w "$PROMETHEUS_IMAGE" \
+            test rules robot-shop-slo-rules.test.yaml
+
+  payment-image:
+    name: Traced payment image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Built locally on the runner only; never pushed
+      - name: Build payment/Dockerfile.otel
+        run: docker build -t rs-payment:ci -f payment/Dockerfile.otel payment
+
+      - name: Import the service with tracing off and on
+        run: |
+          docker run --rm rs-payment:ci python -c "import payment; print('tracing off: import ok')"
+          docker run --rm -e OTEL_SERVICE_NAME=payment \
+            -e OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+            rs-payment:ci python -c "import payment; print('tracing on: import ok')"

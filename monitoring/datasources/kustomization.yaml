@@ -1,0 +1,20 @@
+# Adds Grafana datasources as ConfigMaps that Grafana's datasource sidecar
+# loads automatically (it watches the monitoring namespace for the
+# grafana_datasource label), so no kube-prometheus-stack upgrade is needed.
+#
+# Apply (from the repository root):
+#   kubectl apply -k monitoring/datasources
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_datasource: "1"
+
+configMapGenerator:
+  - name: capstone-datasources
+    files:
+      - capstone-datasources.yaml

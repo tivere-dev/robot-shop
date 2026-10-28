@@ -22,27 +22,34 @@ spec:
       {{ end }}
       containers:
       - name: payment
-        image: {{ .Values.image.repo }}/rs-payment:{{ .Values.image.version }}
+        image: {{ .Values.payment.image | default (include "robot-shop.image" (list $ "rs-payment")) | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
-        # agent networking access
+        {{- if or .Values.payment.gateway .Values.payment.tracing.enabled }}
         env:
-          - name: INSTANA_AGENT_HOST
-            valueFrom:
-              fieldRef:
-                fieldPath: status.hostIP
           {{- if .Values.payment.gateway }}
           - name: PAYMENT_GATEWAY
             value: {{ .Values.payment.gateway }}
           {{- end }}
+          {{- if .Values.payment.tracing.enabled }}
+          - name: OTEL_SERVICE_NAME
+            value: payment
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: service.namespace={{ .Release.Namespace }},deployment.environment=capstone
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: {{ .Values.payment.tracing.endpoint | quote }}
+          {{- end }}
+        {{- end }}
         ports:
         - containerPort: 8080
         resources:
           limits:
             cpu: 200m
-            memory: 100Mi
+            # Peak was 86 MiB of the old 100Mi limit before tracing was added;
+            # the OpenTelemetry SDK needs room on top of that
+            memory: 192Mi
           requests:
             cpu: 100m
-            memory: 50Mi
+            memory: 64Mi
       restartPolicy: Always
       {{- with .Values.payment.affinity }}
       affinity:

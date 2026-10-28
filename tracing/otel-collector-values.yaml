@@ -1,0 +1,81 @@
+# OpenTelemetry Collector for the Robot Shop capstone
+# (open-telemetry/opentelemetry-collector chart 0.177.0, collector 0.163.2).
+#
+# Services send traces here with OTLP; the collector adds Kubernetes pod
+# details, batches the spans and forwards them to Jaeger. The instructor's
+# OTel config was not provided, so this is the capstone's own pipeline.
+#
+# Install (from the repository root):
+#   helm install otel-collector opentelemetry-collector \
+#     --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+#     --version 0.177.0 -n tracing -f tracing/otel-collector-values.yaml
+
+mode: deployment
+fullnameOverride: otel-collector
+
+image:
+  # The Kubernetes distribution includes the k8s_attributes processor
+  repository: otel/opentelemetry-collector-k8s
+  tag: 0.163.2
+  digest: sha256:cce4142919331aa26dd9e2900b0583dac12c44d2f87c270d3a2110912d4785a9
+
+presets:
+  # Adds k8s.pod.name, k8s.namespace.name, k8s.deployment.name ... to every
+  # span (also creates the read-only RBAC this needs)
+  kubernetesAttributes:
+    enabled: true
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    # memory_limiter and GOMEMLIMIT are derived from this limit
+    memory: 192Mi
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: ${env:MY_POD_IP}:4317
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+    # Receivers the chart enables by default but this setup does not use
+    jaeger: null
+    zipkin: null
+    prometheus: null
+  exporters:
+    otlp_grpc/jaeger:
+      endpoint: jaeger.tracing.svc.cluster.local:4317
+      tls:
+        insecure: true
+    # Prints one summary line per batch, handy to confirm spans arrive
+    debug:
+      verbosity: basic
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_grpc/jaeger, debug]
+      # Only traces are collected here (metrics: Prometheus, logs: Fluent Bit)
+      metrics: null
+      logs: null
+
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+  # Collector's own metrics, scraped by Prometheus
+  metrics:
+    enabled: true
+
+serviceMonitor:
+  enabled: true

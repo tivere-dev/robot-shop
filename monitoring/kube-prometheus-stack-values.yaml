@@ -1,0 +1,180 @@
+# kube-prometheus-stack for the Robot Shop capstone (chart 92.14.0).
+#
+# Sized for a single-node Minikube cluster limited to 7 GB of memory. The
+# instructor's kube-prometheus-stack values were not provided, so these are
+# the capstone's own settings.
+#
+# Install (from the repository root):
+#   helm install monitoring \
+#     oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack \
+#     --version 92.14.0 -n monitoring --create-namespace \
+#     -f monitoring/kube-prometheus-stack-values.yaml
+
+# Keep object names short (monitoring-prometheus, monitoring-grafana, ...)
+fullnameOverride: monitoring
+
+# ---------------------------------------------------------------------------
+# Kubernetes components Minikube does not expose
+# ---------------------------------------------------------------------------
+# etcd, the scheduler, the controller manager and kube-proxy listen only on
+# the node's localhost in Minikube, so Prometheus cannot reach them. Scraping
+# them would show permanently "down" targets and fire false alerts.
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeControllerManager: false
+    kubeProxy: false
+    windows: false
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    # Enough history for the demo; delete the oldest data beyond either limit
+    retention: 24h
+    retentionSize: 1GB
+    # Data lives on a temporary volume and is lost if the pod is recreated
+    storageSpec:
+      emptyDir:
+        sizeLimit: 2Gi
+    # Use every ServiceMonitor, PodMonitor, Probe and PrometheusRule in the
+    # cluster, not only the ones labelled with this Helm release (Traefik's
+    # ServiceMonitor and the SLO alert rules live in other releases).
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        cpu: "1"
+        memory: 900Mi
+
+# ---------------------------------------------------------------------------
+# Alertmanager: sends the Robot Shop SLO alerts to Slack
+# ---------------------------------------------------------------------------
+# The Slack webhook URL is a secret, so it is not in this file. It is read
+# from the Secret "alertmanager-slack" (key webhook-url), created by hand:
+#   kubectl -n monitoring create secret generic alertmanager-slack \
+#     --from-literal=webhook-url='https://hooks.slack.com/services/...'
+# The Secret must exist before installing or upgrading this release.
+alertmanager:
+  alertmanagerSpec:
+    # Mounted at /etc/alertmanager/secrets/alertmanager-slack/
+    secrets:
+      - alertmanager-slack
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  config:
+    route:
+      group_by: [alertname, slo]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "null"
+      routes:
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null"
+        - matchers:
+            - slo = "robot-shop-availability"
+          receiver: slack-robot-shop
+    receivers:
+      - name: "null"
+      - name: slack-robot-shop
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook-url
+            channel: "#robot-shop-alerts"
+            send_resolved: true
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+            text: |-
+              {{ range .Alerts }}*{{ .Annotations.summary }}*
+              {{ .Annotations.description }}
+              Runbook: {{ .Annotations.runbook_url }}
+              Dashboard: {{ .Annotations.dashboard }}
+              {{ end }}
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  # No adminPassword here: the chart generates a random one and stores it in
+  # the Secret "monitoring-grafana", so no password is committed. Read it with:
+  #   kubectl -n monitoring get secret monitoring-grafana \
+  #     -o jsonpath='{.data.admin-password}' | base64 -d
+  persistence:
+    enabled: false
+  # Dashboards are loaded from ConfigMaps labelled grafana_dashboard=1
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      # 384Mi was too low: Grafana was OOMKilled at 383 MiB while rendering
+      # the 18-panel Robot Shop dashboard.
+      memory: 768Mi
+
+# ---------------------------------------------------------------------------
+# Supporting components
+# ---------------------------------------------------------------------------
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 192Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      cpu: 100m
+      memory: 192Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

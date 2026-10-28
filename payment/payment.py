@@ -1,6 +1,5 @@
 import random
 
-import instana
 import os
 import sys
 import time
@@ -14,12 +13,17 @@ from flask import Response
 from flask import request
 from flask import jsonify
 from rabbitmq import Publisher
+# OpenTelemetry (replaces the Instana sensor)
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind
+from tracing import init_tracing, tracer, current_trace_id
 # Prometheus
 import prometheus_client
 from prometheus_client import Counter, Histogram
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
+init_tracing(app)
 
 CART = os.getenv('CART_HOST', 'cart')
 USER = os.getenv('USER_HOST', 'user')
@@ -53,7 +57,7 @@ def metrics():
 
 @app.route('/pay/<id>', methods=['POST'])
 def pay(id):
-    app.logger.info('payment for {}'.format(id))
+    app.logger.info('payment for {} trace_id={}'.format(id, current_trace_id()))
     cart = request.get_json()
     app.logger.info(cart)
 
@@ -127,12 +131,20 @@ def pay(id):
 def queueOrder(order):
     app.logger.info('queue order')
 
-    # For screenshot demo requirements optionally add in a bit of delay
-    delay = int(os.getenv('PAYMENT_DELAY_MS', 0))
-    time.sleep(delay / 1000)
+    with tracer.start_as_current_span('orders publish', kind=SpanKind.PRODUCER) as span:
+        span.set_attribute('messaging.system', 'rabbitmq')
+        span.set_attribute('messaging.destination.name', Publisher.EXCHANGE)
+        span.set_attribute('messaging.rabbitmq.destination.routing_key', Publisher.ROUTING_KEY)
+        span.set_attribute('app.order_id', order['orderid'])
 
-    headers = {}
-    publisher.publish(order, headers)
+        # For screenshot demo requirements optionally add in a bit of delay
+        delay = int(os.getenv('PAYMENT_DELAY_MS', 0))
+        time.sleep(delay / 1000)
+
+        # W3C traceparent header, so a consumer can continue the trace
+        headers = {}
+        inject(headers)
+        publisher.publish(order, headers)
 
 
 def countItems(items):
